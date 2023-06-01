@@ -1,0 +1,96 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var geometry = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-68.5803107203611, -4.726280705189247],
+          [-68.5803107203611, -11.788695310513532],
+          [-57.9235724391111, -11.788695310513532],
+          [-57.9235724391111, -4.726280705189247]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+var utParam = require('users/xjtang/fnrt:Utilities/Parameters');
+var wd = 'projects/bu-nearrealtime/';
+var studyArea = ee.FeatureCollection(wd + 'areas/test_sites').filterBounds(geometry);
+var forestMask = ee.Image(wd + 'forest/forest_mask_hansen').clip(studyArea);
+var maskVis = utParam.getVisParam('Mask');
+var alertVis = utParam.getVisParam('Alerts');
+Map.addLayer(forestMask, maskVis, 'Forest Mask', false);
+Map.addLayer(studyArea, {color: 'red'}, 'Study Area', false);
+
+var alerts = ee.ImageCollection('projects/bu-nearrealtime/results/alerts');
+
+var visualize = function(col) {
+  var img = col.mosaic().unmask();
+  var alert = img.select('ChangeDate').updateMask(img.select('Filtered')).updateMask(forestMask);
+  var id = col.first().get('sensor').getInfo();
+  Map.addLayer(alert, alertVis, id + ' Alerts', false);
+};
+
+var LST = alerts.filterMetadata('sensor','equals','LST');
+var S2 = alerts.filterMetadata('sensor','equals','S2');
+var S1 = alerts.filterMetadata('sensor','equals','S1');
+var LSTS2 = alerts.filterMetadata('sensor','equals','S2LST');
+var LSTS2S1 = alerts.filterMetadata('sensor','equals','S2S1LST');
+var PBC = alerts.filterMetadata('sensor','equals','PBC');
+//Map.addLayer(S1);
+
+var LST_Map = LST.select('Filtered').mosaic().unmask();
+var S2_Map = S2.select('Filtered').mosaic().unmask();
+var S1_Map = S1.select('Filtered').mosaic().unmask();
+var OPT_Map = LSTS2.select('Filtered').mosaic().unmask();
+var ALL_Map = LSTS2S1.select('Filtered').mosaic().unmask();
+var PSB_Map = PBC.select('Filtered').mosaic().unmask();
+
+//Map.addLayer(LST_Map);
+
+var nochange = ee.ImageCollection([LST_Map, S2_Map, S1_Map, OPT_Map, ALL_Map]).sum().lte(0);
+var allchange = ee.ImageCollection([LST_Map, S2_Map, S1_Map, OPT_Map, ALL_Map]).sum().gt(0);
+var possible = nochange.and(PSB_Map);
+var allagree = ee.ImageCollection([LST_Map, S2_Map, S1_Map, OPT_Map, ALL_Map]).sum().gte(5);
+var LSTS2dis = S2_Map.subtract(LST_Map).gt(0);
+var optical = ee.ImageCollection([LST_Map, S2_Map, OPT_Map]).sum().gt(0);
+var s1notoptical = optical.subtract(S1_Map).and(LSTS2dis.not()).gt(0);
+var allotherchange = allchange.subtract(allagree).subtract(LSTS2dis).subtract(s1notoptical).gt(0);
+
+Map.addLayer(nochange.selfMask());
+Map.addLayer(allagree.selfMask());
+Map.addLayer(LSTS2dis.selfMask());
+Map.addLayer(s1notoptical.selfMask());
+Map.addLayer(allotherchange.selfMask());
+Map.addLayer(possible.selfMask());
+
+var strata = nochange.multiply(1)
+                .add(allagree.multiply(2))
+                .add(LSTS2dis.multiply(3))
+                .add(s1notoptical.multiply(4))
+                .add(allotherchange.multiply(5))
+                .add(possible.multiply(5)).updateMask(forestMask);
+
+var stats = strata.reduceRegion({reducer: ee.Reducer.frequencyHistogram(), geometry: studyArea, scale: 10, maxPixels: 1000000000});
+print(stats);
+
+Map.addLayer(strata, {min:1, max:6, palette:['white','red','blue','green','yellow','black']}, 'Strata');
+
+visualize(LST);
+visualize(S2);
+visualize(S1);
+visualize(LSTS2);
+visualize(LSTS2S1);
+visualize(PBC);
+
+Map.setCenter(-61.18418807329864, -6.3470237218092995, 6);
+Map.setOptions('SATELLITE');
+
+Export.image.toAsset({
+  image: strata,
+  description: 'strata',
+  assetId: 'strata',
+  region: studyArea,
+  scale: 10,
+  maxPixels: 1e14
+});

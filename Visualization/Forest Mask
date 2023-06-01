@@ -1,0 +1,63 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var test = /* color: #d63000 */ee.Geometry.Polygon(
+        [[[-56.41249547308548, -7.7701586864041206],
+          [-54.14931187933548, -7.410787295923061],
+          [-54.56679234808548, -5.697271824063881],
+          [-56.80800328558548, -6.090688039491193]]]);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Fusion Near Real-time
+// Near real-time monitoring of forest disturbance by fusion of multi-sensor data
+
+// Generate Forest Mask
+
+// ---------------------------------------------------------------
+// Imports and predefined variables:
+var dataset = ee.Image('UMD/hansen/global_forest_change_2019_v1_7');
+var treeGain = dataset.select('gain');
+var treeLoss = dataset.select('loss');
+var treeCover = dataset.select('treecover2000');
+var treeCoverVis = {bands: ['treecover2000'], min: 0, max: 100, palette: ['black', 'green']};
+var treeChangeVis = {min: 0, max: 1, palette: ['blue','green']};
+var proj = treeCover.projection().getInfo();
+var studyArea = ee.FeatureCollection("projects/bu-nearrealtime/areas/test_sites");
+
+// ---------------------------------------------------------------
+// UIs:
+var saveButton = ui.Button('Save');
+saveButton.onClick(function(){
+  Export.image.toDrive({
+    image: forestMask2, 
+    description: 'SaveMap', 
+    region: studyArea, 
+    scale: 30,
+    maxPixels: 1e13});
+});
+
+var savePanel = ui.Panel({
+  widgets: [saveButton],
+  style: {position: 'bottom-left'}
+});
+
+// ---------------------------------------------------------------
+// Main functions:
+var getForestMask = function(cover, loss, gain){
+  return cover.gt(50).add(gain).subtract(loss);
+};
+
+// ---------------------------------------------------------------
+// Initialization:
+var treeGainMasked = treeGain.updateMask(treeGain.eq(1));
+var treeLossMasked = treeLoss.updateMask(treeLoss.eq(1));
+var forestMask = getForestMask(treeCover, treeLoss, treeGain);
+var forestMask2 = forestMask.eq(1);
+
+//Map.addLayer(treeCover, treeCoverVis, 'Tree Cover', false);
+//Map.addLayer(treeLossMasked, treeChangeVis, 'Tree Loss', false);
+//Map.addLayer(treeGainMasked, treeChangeVis, 'Tree Gain', false);
+Map.addLayer(forestMask2, treeChangeVis, 'Forest Mask', true);
+
+Map.setOptions('SATELLITE');
+Map.add(savePanel);
+Map.setCenter(-55.2305082132811, -6.955936113922276, 8);
+
+// End

@@ -1,0 +1,615 @@
+// Fusion Near Real-time
+// Near real-time monitoring of forest disturbance by fusion of multi-sensor data
+
+// Sample Interpreter (Test)
+
+// ---------------------------------------------------------------
+// Imports and predefined variables:
+var listener = 0;
+var utChart = require('users/xjtang/fnrt:Utilities/Chart');
+var utArea = require('users/xjtang/fnrt:Utilities/Area');
+var utParam = require('users/xjtang/fnrt:Utilities/Parameters');
+var utCommon = require('users/xjtang/fnrt:Utilities/Common');
+var trainPeriod = utParam.trainPeriod;
+var monitorPeriod = utParam.monitorPeriod;
+var fullPeriod = utParam.fullPeriod;
+var wd = 'projects/bu-nearrealtime/';
+var studyArea = ee.FeatureCollection(wd + 'areas/test_sites');
+var forestMask = ee.Image(wd + 'forest/forest_mask_hansen');
+var alerts = ee.ImageCollection('projects/bu-nearrealtime/results/alerts');
+var cacheLST = null;
+var cacheS1 = null;
+var cacheS2 = null;
+var cacheMOD = null;
+var cacheNRT = null;
+var region = null;
+var areaID = null;
+var LSTCCD = null;
+var LSTNRT = null;
+var LSTRTS = null;
+var S1CCD = null;
+var S1NRT = null;
+var S1RTS = null;
+var S2CCD = null;
+var S2NRT = null;
+var S2RTS = null;
+var RTS = null;
+var NRT = null;
+var res = 10;
+var ccdBand = '';
+var samples = null;
+var currentSU = 0;
+var maxSU = 0;
+var minSU = 0;
+var alertVis = utParam.getVisParam('Alerts');
+var maskVis = utParam.getVisParam('Mask');
+var LSTALT = alerts.filterMetadata('sensor','equals','LST');
+var S2ALT = alerts.filterMetadata('sensor','equals','S2');
+var S1ALT = alerts.filterMetadata('sensor','equals','S1');
+var LSTS2ALT = alerts.filterMetadata('sensor','equals','S2LST');
+var LSTS2S1ALT = alerts.filterMetadata('sensor','equals','S2S1LST');
+var STA = ee.Image('projects/bu-nearrealtime/reference/strata');
+
+// ---------------------------------------------------------------
+// Main functions:
+  // run and plot CCD for a pixel
+var chartCache = function(mid) {
+  resetTSPanel();
+  var nrtParam = utParam.getNRTParam('Common');
+  var sample = samples.filterMetadata('mid2', 'equals', mid).first();
+  var pixel = sample.geometry();
+  var sid = sample.get('sid');
+  var region = sample.get('region');
+  var lstTS = cacheLST.filterMetadata('region', 'equals', region).filterMetadata('sid', 'equals', sid).sort('fitTime');
+  getCCDCacheChart(lstTS, 'Landsat', pixel);
+  var s1TS = cacheS1.filterMetadata('region', 'equals', region).filterMetadata('sid', 'equals', sid).sort('fitTime');
+  getCCDCacheChart(s1TS, 'Sentinel-1', pixel);
+  var s2TS = cacheS2.filterMetadata('region', 'equals', region).filterMetadata('sid', 'equals', sid).sort('fitTime');
+  getCCDCacheChart(s2TS, 'Sentinel-2', pixel);
+  var modTS = cacheMOD.filterMetadata('region', 'equals', region).filterMetadata('sid', 'equals', sid).sort('fitTime');
+  getCCDCacheChart(modTS, 'MODIS', pixel);
+  
+  var nrtTS = cacheNRT.filterMetadata('region', 'equals', region).filterMetadata('sid', 'equals', sid);
+  var nrtMonitor = ee.FeatureCollection(utChart.getNRTMonitor(nrtTS.sort('fitTime'), nrtParam));
+  var nrtList = ["dateString", "Z_train", "Ball", 'Strike', 'StrikeOut'];
+  var nrtTable = utChart.getCCDTable(nrtMonitor, nrtList);
+  nrtTable.evaluate(function(t, e) {
+    var nrtChart = utChart.getNRTChart(t, ' ', 0, 0);
+    nrtChart.onClick(function(date) {
+      if (date === null) {
+        utCommon.removeLayer(mapPanel, '_');
+      } else {
+        addNRTImage(pixel, date, 'Sentinel-2');
+        addNRTImage(pixel, date, 'Sentinel-1');
+        addNRTImage(pixel, date, 'Landsat');
+        utCommon.removeLayer(mapPanel, 'Alert');
+        visualize(LSTALT);
+        visualize(S2ALT);
+        visualize(S1ALT);
+        visualize(LSTS2ALT);
+        visualize(LSTS2S1ALT);
+        reloadSamples();
+      }
+    });
+    var chartPanel = ui.Panel({
+      widgets: [nrtChart],
+      style: {height: '200px'}
+    });
+    tsPanel.add(chartPanel);
+  });
+};
+
+var getCCDCacheChart = function(ccdTS, sensor, pixel) {
+  var ccdParam = utParam.getCCDParam(sensor);
+  var runParam = utParam.getRunParam(sensor);
+  var segList = utChart.genSegList(runParam.nSeg);
+  var ccdTable = utChart.getCCDTable(ccdTS, segList);
+  //var chart2 = utChart.getCCDChart(ccdTable.getInfo(), sensor + ' ' + runParam.band, 0, 0, runParam.nSeg);
+  ccdTable.evaluate(function(t, e) {
+    var chart = utChart.getCCDChart(t, sensor + ' ' + runParam.band, 0, 0, runParam.nSeg);
+    chart.onClick(function(date) {
+      if (date === null) {
+        utCommon.removeLayer(mapPanel, '_');
+      } else {
+        var img = ee.Image(utCommon.getImage(pixel, date, sensor));
+        var imgVis = utParam.getVisParam(sensor);
+        mapPanel.addLayer(img, imgVis, img.get('system:index').getInfo());
+        reloadSamples();
+      }
+    });
+    var chartPanel = ui.Panel({
+      widgets: [chart],
+      style: {height: '200px'}
+    });
+    tsPanel.add(chartPanel);
+  });
+};
+
+  // run and plot CCD for a pixel
+var chartCCD = function(coords) {
+  resetTSPanel();
+  var sensor = ccdSelect.getValue();
+  tsPanel.add(ui.Label('Running CCD on ' + sensor + ' data...'));
+  var pixel = ee.Geometry.Point([coords.lon, coords.lat]);
+  var trainData = utCommon.getData(pixel, trainPeriod, sensor, false);
+  var monitorData = utCommon.getData(pixel, monitorPeriod, sensor, false);
+  utCommon.addPixel(mapPanel, coords, 0.000135, '0000FF', 'Clicked');
+  var ccdParam = utParam.getCCDParam(sensor);
+  var runParam = utParam.getRunParam(sensor);
+  var ccd = ee.Image(ee.Algorithms.If(
+                region.contains(pixel),
+                getBaseline(sensor, 'ccd'),
+                utCommon.runCCD2(trainData, trainPeriod, ccdBand, ccdParam.dateFormat)
+              ));
+  var ccdTS = utChart.getTimeSeries(trainData, monitorData, ccd, pixel, ccdParam.dateFormat, ccdBand, 0.2);
+  var segList = utChart.genSegList(runParam.nSeg);
+  var ccdTable = utChart.getCCDTable(ccdTS, segList);
+  ccdTable.evaluate(function(t, e) {
+    var chart = utChart.getCCDChart(t, ccdBand, coords.lat, coords.lon, runParam.nSeg);
+    chart.onClick(
+      function(date) {
+        if (date === null) {
+          utCommon.removeLayer(mapPanel, '_');
+        } else {
+          var img = ee.Image(utCommon.getImage(pixel, date, sensor));
+          var imgVis = utParam.getVisParam(sensor);
+          mapPanel.addLayer(img, imgVis, img.get('system:index').getInfo());
+          utCommon.removeLayer(mapPanel, 'Alert');
+          visualize(LSTALT);
+          visualize(S2ALT);
+          visualize(S1ALT);
+          visualize(LSTS2ALT);
+          visualize(LSTS2S1ALT);
+          utCommon.removeLayer(mapPanel, 'Clicked');
+          utCommon.addPixel(mapPanel, coords, 0.000135, '0000FF', 'Clicked');
+        }
+      }
+    );
+    tsPanel.clear();
+    tsPanel.add(chart);
+  });
+};
+
+  // run sensor specifi near real time
+var runSensorNRT = function(pixel, sensor) {
+  var train = utCommon.getData(pixel, trainPeriod, sensor, false);
+  var monitor = ee.ImageCollection(ee.Algorithms.If(
+      region.contains(pixel),
+      getBaseline(sensor, 'rts'),
+      utCommon.getData(pixel, monitorPeriod, sensor, false)
+    ));
+  var ccdParam = utParam.getCCDParam(sensor);
+  var runParam = utParam.getRunParam(sensor);
+  var nrtParam = utParam.getNRTParam(sensor);
+  nrtParam.maxZ = 1000;
+  var ccd = ee.Image(ee.Algorithms.If(
+                region.contains(pixel),
+                getBaseline(sensor, 'ccd'),
+                utCommon.runCCD2(train, trainPeriod, runParam.band, ccdParam.dateFormat)
+              ));
+  var ccdTS = ee.FeatureCollection(ee.Algorithms.If(
+      region.contains(pixel),
+      utChart.getTimeSeries2(train, monitor, ccd, pixel, ccdParam.dateFormat, nrtParam.band),
+      utChart.getTimeSeries(train, monitor, ccd, pixel, ccdParam.dateFormat, nrtParam.band)
+    ));
+  var Z = ee.FeatureCollection(ee.Algorithms.If(
+      region.contains(pixel),
+      utChart.addZ2(ccdTS, nrtParam.c, getBaseline(sensor, 'nrt'), pixel, nrtParam.maxZ, nrtParam.minSTD),
+      utChart.addZ(ccdTS, nrtParam.c, nrtParam.maxZ, nrtParam.minSTD)
+    ));
+  return utChart.checkZ(Z, nrtParam);
+};
+
+  // add image when nrt chart is clicked
+var addNRTImage = function(pixel, date, sensor) {
+  var img = utCommon.getImage(pixel, date, sensor);
+  if (img.getInfo() != null) {
+    var imgVis = utParam.getVisParam(sensor);
+    img = ee.Image(img);
+    mapPanel.addLayer(img, imgVis, img.get('system:index').getInfo());
+  } 
+};
+
+  // run and plot NRT for a pixel
+var chartNRT = function(coords) {
+  resetTSPanel();
+  tsPanel.add(ui.Label('Running NRT...'));
+  var pixel = ee.Geometry.Point([coords.lon, coords.lat]);
+  utCommon.addPixel(mapPanel, coords, 0.000135, '0000FF', 'Clicked');
+  var nrtParam = utParam.getNRTParam('Common');
+  var nrtTS = ee.FeatureCollection([]);
+  if (S2Check.getValue()) {nrtTS = nrtTS.merge(runSensorNRT(pixel, 'Sentinel-2'))}
+  if (S1Check.getValue()) {nrtTS = nrtTS.merge(runSensorNRT(pixel, 'Sentinel-1'))}
+  if (LSTCheck.getValue()) {nrtTS = nrtTS.merge(runSensorNRT(pixel, 'Landsat'))}
+  nrtTS = nrtTS.filterMetadata('x', 'not_equals', null);
+  //print(nrtTS)
+  if (nrtTS.size().gt(0)) {
+    //var nrtMonitor = ee.FeatureCollection(utChart.getNRTMonitor(nrtTS.sort('system:time_start'), nrtParam));
+    var nrtList = ["dateString", "Z_train", "Z_monitor"];
+    var nrt = utChart.getCCDTable(nrtTS, nrtList);
+    //print(nrt);
+    nrt.evaluate(function(t, e) {
+      var chart = utChart.getNRTChart2(t, ' ', coords.lat, coords.lon);
+      chart.onClick(
+        function(date) {
+          if (date === null) {
+            utCommon.removeLayer(mapPanel, '_');
+          } else {
+            if (S2Check.getValue()) {addNRTImage(pixel, date, 'Sentinel-2')}
+            if (S1Check.getValue()) {addNRTImage(pixel, date, 'Sentinel-1')}
+            if (LSTCheck.getValue()) {addNRTImage(pixel, date, 'Landsat')}
+            utCommon.removeLayer(mapPanel, 'Clicked');
+            utCommon.addPixel(mapPanel, coords, 0.000135, '0000FF', 'Clicked');
+          }
+        }
+      );
+      tsPanel.clear();
+      tsPanel.add(chart);
+    });
+  } else {
+    tsPanel.add(ui.Label('No sensor was selected.'));
+  }
+};
+
+  // reset the time series panel
+var resetTSPanel = function() {
+  tsPanel.clear();
+  utCommon.removeLayer(mapPanel, '_');
+  utCommon.removeLayer(mapPanel, 'Clicked');
+};
+
+  // reset all
+var resetAll = function() {
+  resetTSPanel();
+  alerts = null;
+  utCommon.removeLayer(mapPanel, 'Alert');
+};
+
+var reloadSamples = function() {
+  utCommon.removeLayer(mapPanel, 'Samples');
+  mapPanel.addLayer(samples, {color: 'red'}, 'Samples');
+};
+
+  // choose files
+var getBaseline = function(sensor, baseline) {
+  if (sensor == 'Sentinel-1'){
+    if (baseline == 'nrt') {
+      return S1NRT;
+    } else if (baseline == 'rts') {
+      return S1RTS;
+    } else {
+      return S1CCD;
+    }
+  } else if (sensor == 'Sentinel-2') {
+    if (baseline == 'nrt') {
+      return S2NRT;
+    } else if (baseline == 'rts') {
+      return S2RTS;
+    } else {
+      return S2CCD;
+    }
+  } else {
+    if (baseline == 'nrt') {
+      return LSTNRT;
+    } else if (baseline == 'rts') {
+      return LSTRTS;
+    } else {
+      return LSTCCD;
+    }
+  }
+};
+
+var getCCDBands = function(sensor) {
+  var runParam = utParam.getRunParam(sensor);
+  return runParam.baselineBands;
+};
+
+var visualize = function(col) {
+  var palette = ['#C2523C','#EDA113','#FFFF00','#00DB00','#20998F','#0B2C7A'];
+  var vis = {min: 2020.333, max: 2020.917, palette: palette};
+  var img = col.mosaic().unmask();
+  var alert = img.select('DetectionDate').updateMask(img.select('Filtered')).updateMask(forestMask);
+  var id = col.first().get('sensor').getInfo();
+  mapPanel.addLayer(alert, vis, id + ' Alerts', false);
+};
+
+var moveToPixel = function(SU) {
+  if (SU > maxSU) {
+    SU = minSU;
+  } else if (SU < minSU) {
+    SU = maxSU;
+  }
+  var samplePixel = samples.filterMetadata('mid2', 'equals', SU).first();
+  var kmlLabel = ui.Label('KML', {}, ee.FeatureCollection([samplePixel]).getDownloadURL('kml'));
+  var lat = samplePixel.geometry().coordinates().get(1).getInfo().toFixed(3);
+  var lon = samplePixel.geometry().coordinates().get(0).getInfo().toFixed(3);
+  mapPanel.centerObject(samplePixel, 15);
+  
+  yearBox.setValue(samplePixel.get('year').getInfo());
+  monthBox.setValue(samplePixel.get('month').getInfo());
+  dayBox.setValue(samplePixel.get('day').getInfo());
+  changeSelect.setValue(samplePixel.get('change').getInfo());
+  chgConfSelect.setValue(samplePixel.get('chgconf').getInfo());
+  dateConfSelect.setValue(samplePixel.get('dateconf').getInfo());
+  typeSelect.setValue(samplePixel.get('type').getInfo());
+  scaleSelect.setValue(samplePixel.get('scale').getInfo());
+  sensorSelect.setValue(samplePixel.get('basedon').getInfo());
+  noteBox.setValue(samplePixel.get('note').getInfo());
+  currentSU = SU;
+  sidLabel.setValue('MID: ' + currentSU);
+  locLabel.setValue('Lat, Lon: ' + lat + ', ' + lon);
+  kmlPanel.clear();
+  kmlPanel.add(kmlLabel);
+  chartCache(SU);
+};
+
+var addRegion = function(samples, region) {
+  return ee.FeatureCollection(samples.map(function(x){
+    return x.set({region: region});
+  }));
+};
+
+var fixMID = function(samples) {
+  return ee.FeatureCollection(samples.map(function(x){
+    var mid2 = ee.Number.parse(x.get('mid'));
+    return x.set({mid2: mid2});
+  }));
+};
+
+// ---------------------------------------------------------------
+// UIs:
+  // map panel
+var mapPanel = ui.Map({style: {cursor: 'crosshair', width: '80%'}});
+mapPanel.setCenter(-61.18418807329864, -6.3470237218092995, 6);
+mapPanel.setOptions('SATELLITE');
+
+  // record panel
+var loadSampleButton = ui.Button('Load Samples');
+var IDBox = ui.Textbox({placeholder: 'Search ID', style: {width: '80px'}});
+var lastButton = ui.Button('Last');
+var nextButton = ui.Button('Next');
+var moveSet = ui.Panel([lastButton, IDBox, nextButton], 
+                        ui.Panel.Layout.Flow('horizontal'));
+var entryLabel = ui.Label('Date:');
+var yearBox = ui.Textbox({placeholder:'Year...', value:'0', style:{width: '50px'}});
+var monthBox = ui.Textbox({placeholder:'Month...', value:'0', style:{width: '35px'}});
+var dayBox = ui.Textbox({placeholder:'Day...', value:'0', style:{width: '35px'}});
+var entrySet = ui.Panel([entryLabel, yearBox, monthBox, dayBox], ui.Panel.Layout.Flow('horizontal'));
+var sidLabel = ui.Label('MID: 0');
+var locLabel = ui.Label('Lat, Lon: 0, 0');
+var kmlLabel = ui.Label('KML');
+var kmlPanel = ui.Panel([kmlLabel]);
+var infoPanel = ui.Panel([sidLabel, locLabel, kmlPanel], ui.Panel.Layout.Flow('horizontal'));
+var changeSelect = ui.Select(['Yes', 'No', 'NonForest', 'ChangedEarlier', 'NA'], 'Change', 'NA');
+var changeSet = ui.Panel([ui.Label('Change?'), changeSelect], ui.Panel.Layout.Flow('horizontal'));
+var typeSelect = ui.Select(['Deforestation', 'Degradation', 'Recovered', 'Unsure', 'NA'], 'Type', 'NA');
+var typeSet = ui.Panel([ui.Label('Type?'), typeSelect], ui.Panel.Layout.Flow('horizontal'));
+var chgConfSelect = ui.Select(['High', 'Fair', 'Low'], 'Confidence', 'High');
+var chgConfSet = ui.Panel([ui.Label('Change Confidence?'), chgConfSelect], ui.Panel.Layout.Flow('horizontal'));
+var dateConfSelect = ui.Select(['High', 'Fair', 'Low'], 'Confidence', 'High');
+var dateConfSet = ui.Panel([ui.Label('Date Confidence?'), dateConfSelect], ui.Panel.Layout.Flow('horizontal'));
+var scaleSelect = ui.Select(['30m', '10m', 'Both'], 'Scale', 'Both');
+var scaleSet = ui.Panel([ui.Label('Change Scale'), scaleSelect], ui.Panel.Layout.Flow('horizontal'));
+var sensorSelect = ui.Select(['Landsat', 'Sentinel-2', 'Sentinel-1', 'MODIS', 'High-res'], 'Based', 'Landsat');
+var sensorSet = ui.Panel([ui.Label('Based on'), sensorSelect], ui.Panel.Layout.Flow('horizontal'));
+var noteBox = ui.Textbox({placeholder: 'Note', 
+                                style:{width: '200px'}});
+var recordSet = ui.Panel([moveSet, infoPanel, changeSet, typeSet, chgConfSet, scaleSet, 
+                          entrySet, sensorSet, dateConfSet, noteBox], 
+                          ui.Panel.Layout.Flow('vertical'));
+var recPanel = ui.Panel({
+  widgets: [ui.Label('Reference Data'), loadSampleButton], 
+  layout: ui.Panel.Layout.Flow('vertical'),
+  style: {width: '20%'}});
+
+  // menu panel
+var loadButton = ui.Button('Load');
+var ccdButton = ui.Button('CCD');
+var nrtButton = ui.Button('NRT');
+var resetButton = ui.Button('Reset');
+var menuSet = ui.Panel([loadButton, ccdButton, nrtButton, resetButton], 
+                        ui.Panel.Layout.Flow('vertical'));
+var ccdSelect = ui.Select(['Landsat', 'Sentinel-2', 'Sentinel-1'], 'Select sensor for CCD.', 'Landsat');
+var ccdBands = getCCDBands('Landsat');
+ccdBand = ccdBands[0];
+var bandSelect = ui.Select(ccdBands, 'Select band for CCD.', ccdBand);
+var bandSelectPanel = ui.Panel([bandSelect]);
+var selectPanel = ui.Panel([ccdSelect, bandSelectPanel], ui.Panel.Layout.Flow('horizontal'));
+var LSTCheck = ui.Checkbox('Landsat', true);
+var S2Check = ui.Checkbox('Sentinel-2', true);
+var S1Check = ui.Checkbox('Sentinel-1', false);
+var areaList = studyArea.aggregate_array('id').getInfo();
+var areaSelect = ui.Select(areaList, 'Select area.', areaList[0]);
+var selectSet = ui.Panel([areaSelect, selectPanel, LSTCheck, S2Check, S1Check], 
+                        ui.Panel.Layout.Flow('vertical'));
+var menuUISet = ui.Panel([menuSet, selectSet], ui.Panel.Layout.Flow('horizontal'));
+var menuPanel = ui.Panel({
+  widgets: [ui.Label('Menu'), menuUISet],
+  layout: ui.Panel.Layout.Flow('vertical'),
+  style: {height: '20%'}});
+
+  // ts panel
+var tsPanel = ui.Panel({
+  widgets: [],
+  style: {position: 'bottom-right', height: '30%'}});
+
+  // ui panel
+var mapPanel2 = ui.Panel({
+  style: {width: '70%'},
+  widgets:[ui.SplitPanel(mapPanel, tsPanel, 'vertical', false)]});
+var controlPanel = ui.Panel({
+  style: {width: '30%'},
+  widgets:[ui.SplitPanel(recPanel, menuPanel, 'vertical', false)]});
+var uiPanel = ui.SplitPanel(mapPanel2, controlPanel, 'horizontal');
+
+// ---------------------------------------------------------------
+// Runtime functions:
+loadButton.onClick(function() {
+  areaID = areaSelect.getValue();
+  region = studyArea.filterMetadata('id', 'contains', areaID).first().geometry();
+  var CCD = ee.ImageCollection(wd + 'baselines/ccd').filterMetadata('region', 'equals', areaID);
+  LSTCCD = CCD.filterMetadata('sensor', 'equals', 'Landsat').first();
+  S1CCD = CCD.filterMetadata('sensor', 'equals', 'Sentinel-1').first();
+  S2CCD = CCD.filterMetadata('sensor', 'equals', 'Sentinel-2').first();
+  NRT = ee.ImageCollection(wd + 'baselines/nrt').filterMetadata('region', 'equals', areaID); 
+  LSTNRT = NRT.filterMetadata('sensor', 'equals', 'Landsat').first();
+  S1NRT = NRT.filterMetadata('sensor', 'equals', 'Sentinel-1').first();
+  S2NRT = NRT.filterMetadata('sensor', 'equals', 'Sentinel-2').first();
+  RTS = ee.ImageCollection(wd + 'baselines/rts').filterMetadata('region', 'equals', areaID);
+  LSTRTS = RTS.filterMetadata('sensor', 'equals', 'Landsat');
+  S1RTS = RTS.filterMetadata('sensor', 'equals', 'Sentinel-1');
+  S2RTS = RTS.filterMetadata('sensor', 'equals', 'Sentinel-2');
+  ccdButton.setDisabled(false);
+  nrtButton.setDisabled(false);
+  resetButton.setDisabled(false);
+  LSTCheck.setDisabled(false);
+  S1Check.setDisabled(false);
+  S2Check.setDisabled(false);
+  ccdSelect.setDisabled(false);
+  bandSelect.setDisabled(false);
+  areaSelect.setDisabled(true);
+  loadButton.setDisabled(true);
+});
+
+ccdButton.onClick(function() {
+  if (listener == 1) {
+    ccdButton.setLabel('CCD');
+    listener = 0;
+  } else {
+    nrtButton.setLabel('NRT');
+    ccdButton.setLabel('Cancel');
+    listener = 1;
+  }
+});
+
+nrtButton.onClick(function() {
+  if (listener == 2) {
+    nrtButton.setLabel('NRT');
+    listener = 0;
+  } else {
+    nrtButton.setLabel('Cancel');
+    ccdButton.setLabel('CCD');
+    listener = 2;
+  }
+});
+
+resetButton.onClick(function() {
+  resetAll();
+});
+
+ccdSelect.onChange(function() {
+  ccdBands = getCCDBands(ccdSelect.getValue());
+  ccdBand = ccdBands[0];
+  bandSelect = ui.Select(ccdBands, 'Select band for CCD.', ccdBand);
+  bandSelectPanel.clear();
+  bandSelectPanel.add(bandSelect);
+  bandSelect.onChange(function() {
+    ccdBand = bandSelect.getValue();
+  });
+});
+
+bandSelect.onChange(function() {
+  ccdBand = bandSelect.getValue();
+});
+
+loadSampleButton.onClick(function() {
+  samples = fixMID(addRegion(ee.FeatureCollection(wd + 'reference/done/A1X1Y1_done'), 'A1X1Y1')
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/done/A2X1Y1_done'), 'A2X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/done/A3X1Y1_done'), 'A3X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/done/A4X1Y1_done'), 'A4X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/done/A5X1Y1_done'), 'A5X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/done/A5X2Y1_done'), 'A5X2Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/done/A6X1Y1_done'), 'A6X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/done/A7X1Y1_done'), 'A7X1Y1')));
+  cacheLST = addRegion(ee.FeatureCollection(wd + 'reference/A1X1Y1/A1X1Y1_CCD_LST'), 'A1X1Y1')
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A2X1Y1/A2X1Y1_CCD_LST'), 'A2X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A3X1Y1/A3X1Y1_CCD_LST'), 'A3X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A4X1Y1/A4X1Y1_CCD_LST'), 'A4X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A5X1Y1/A5X1Y1_CCD_LST'), 'A5X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A5X2Y1/A5X2Y1_CCD_LST'), 'A5X2Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A6X1Y1/A6X1Y1_CCD_LST'), 'A6X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A7X1Y1/A7X1Y1_CCD_LST'), 'A7X1Y1'));
+  cacheS1 = addRegion(ee.FeatureCollection(wd + 'reference/A1X1Y1/A1X1Y1_CCD_S1'), 'A1X1Y1')
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A2X1Y1/A2X1Y1_CCD_S1'), 'A2X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A3X1Y1/A3X1Y1_CCD_S1'), 'A3X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A4X1Y1/A4X1Y1_CCD_S1'), 'A4X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A5X1Y1/A5X1Y1_CCD_S1'), 'A5X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A5X2Y1/A5X2Y1_CCD_S1'), 'A5X2Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A6X1Y1/A6X1Y1_CCD_S1'), 'A6X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A7X1Y1/A7X1Y1_CCD_S1'), 'A7X1Y1'))
+              .filterMetadata('x', 'greater_than', -100);
+  cacheS2 = addRegion(ee.FeatureCollection(wd + 'reference/A1X1Y1/A1X1Y1_CCD_S2'), 'A1X1Y1')
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A2X1Y1/A2X1Y1_CCD_S2'), 'A2X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A3X1Y1/A3X1Y1_CCD_S2'), 'A3X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A4X1Y1/A4X1Y1_CCD_S2'), 'A4X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A5X1Y1/A5X1Y1_CCD_S2'), 'A5X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A5X2Y1/A5X2Y1_CCD_S2'), 'A5X2Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A6X1Y1/A6X1Y1_CCD_S2'), 'A6X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A7X1Y1/A7X1Y1_CCD_S2'), 'A7X1Y1'));
+  cacheMOD = addRegion(ee.FeatureCollection(wd + 'reference/A1X1Y1/A1X1Y1_CCD_MOD'), 'A1X1Y1')
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A2X1Y1/A2X1Y1_CCD_MOD'), 'A2X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A3X1Y1/A3X1Y1_CCD_MOD'), 'A3X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A4X1Y1/A4X1Y1_CCD_MOD'), 'A4X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A5X1Y1/A5X1Y1_CCD_MOD'), 'A5X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A5X2Y1/A5X2Y1_CCD_MOD'), 'A5X2Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A6X1Y1/A6X1Y1_CCD_MOD'), 'A6X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A7X1Y1/A7X1Y1_CCD_MOD'), 'A7X1Y1'));
+  cacheNRT = addRegion(ee.FeatureCollection(wd + 'reference/A1X1Y1/A1X1Y1_NRT'), 'A1X1Y1')
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A2X1Y1/A2X1Y1_NRT'), 'A2X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A3X1Y1/A3X1Y1_NRT'), 'A3X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A4X1Y1/A4X1Y1_NRT'), 'A4X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A5X1Y1/A5X1Y1_NRT'), 'A5X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A5X2Y1/A5X2Y1_NRT'), 'A5X2Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A6X1Y1/A6X1Y1_NRT'), 'A6X1Y1'))
+              .merge(addRegion(ee.FeatureCollection(wd + 'reference/A7X1Y1/A7X1Y1_NRT'), 'A7X1Y1'))
+              .filterMetadata('x', 'greater_than', -100);
+  mapPanel.addLayer(samples, {color: 'red'}, 'Samples');
+  minSU = 0;
+  maxSU = samples.size().getInfo() - 1;
+  recPanel.add(recordSet);
+  loadSampleButton.setDisabled(true);
+  moveToPixel(0);
+});
+
+lastButton.onClick(function() {
+  moveToPixel(currentSU - 1);
+});
+
+nextButton.onClick(function() {
+  moveToPixel(currentSU + 1);
+});
+
+IDBox.onChange(function(input){
+  moveToPixel(parseInt(input, 10));
+});
+
+mapPanel.onClick(function(coords) {
+  if (listener == 1) {
+    chartCCD(coords);
+  } else if (listener == 2) {
+    chartNRT(coords);
+  }
+});
+
+// ---------------------------------------------------------------
+// Initialization:
+ccdButton.setDisabled(true);
+nrtButton.setDisabled(true);
+resetButton.setDisabled(true);
+LSTCheck.setDisabled(true);
+S1Check.setDisabled(true);
+S2Check.setDisabled(true);
+ccdSelect.setDisabled(true);
+bandSelect.setDisabled(true);
+ui.root.clear();
+ui.root.add(uiPanel);
+mapPanel.addLayer(studyArea, {color: 'red'}, 'Study Area', false);
+mapPanel.addLayer(forestMask, maskVis, 'Forest Mask', false);
+mapPanel.addLayer(STA.selfMask(), {min:1, max:6}, 'Stratification', false);
+visualize(LSTALT);
+visualize(S2ALT);
+visualize(S1ALT);
+visualize(LSTS2ALT);
+visualize(LSTS2S1ALT);
+
+// End

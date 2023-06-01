@@ -1,0 +1,213 @@
+// Fusion Near Real-time
+// Near real-time monitoring of forest disturbance by fusion of multi-sensor data
+
+// Model settings and parameters
+
+// ---------------------------------------------------------------
+// Model settings
+var trainPeriod = ee.Dictionary({
+     'start': '2017-01-01',
+     'end': '2020-01-01'});
+var monitorPeriod = ee.Dictionary({
+     'start': '2020-01-01',
+     'end': '2021-07-01'});
+var fullPeriod = ee.Dictionary({
+     'start': trainPeriod.get('start'),
+     'end': monitorPeriod.get('end')});
+var rtsPeriod = ee.Dictionary({
+     'start': '2020-08-01',
+     'end': '2020-11-10'});
+     
+// ---------------------------------------------------------------
+// Model parameters
+  // get CCD parameters
+var getCCDParam = function(sensor) {
+  var ccdParam = {
+    dateFormat: 1,
+    lambda: 0.002,
+    maxIterations: 10000,
+    minObservations: 24,
+    chiSquareProbability: 0.999,
+    minNumOfYearsScaler: 2.9};
+  if (sensor == 'Sentinel-2') {
+    ccdParam.breakpointBands = ['Green', 'NDVI', 'SWIR2', 'NDFI'];
+    ccdParam.tmaskBands = ['Green', 'SWIR2'];
+  } else if (sensor == 'Sentinel-1') {
+    ccdParam.breakpointBands = ['VV', 'VH', 'ratio'];
+    ccdParam.tmaskBands = ['VV', 'VH'];
+  } else if (sensor == 'MODIS') {
+    ccdParam.breakpointBands = ['Red', 'NIR', 'NDVI'];
+    ccdParam.tmaskBands = ['Red', 'NIR'];
+  } else {
+    ccdParam.breakpointBands = ['Green', 'Red', 'NIR', 'SWIR1', 'SWIR2'];
+    ccdParam.tmaskBands = ['Green', 'SWIR2'];
+  }
+  return ccdParam;
+};
+
+  // get CCD runtime parameters
+var getRunParam = function(sensor) {
+  var runParam = {
+    sDate: trainPeriod.get('start'),
+    eDate: trainPeriod.get('end'),
+    nSeg: 1};
+  if (sensor == 'Sentinel-2') {
+    runParam.band = 'NDFI';
+    runParam.baselineBands = ['NDFI'];
+    runParam.res = 10;
+  } else if (sensor == 'Sentinel-1') {
+    runParam.band = 'VV';
+    runParam.baselineBands = ['VV'];
+    runParam.res = 10;
+  } else if (sensor == 'MODIS') {
+    runParam.band = 'NDVI';
+    runParam.baselineBands = ['NDVI'];
+    runParam.res = 231.656358264;
+  } else {
+    runParam.band = 'NDFI';
+    runParam.baselineBands = ['NDFI'];
+    runParam.res = 30;
+  }
+  return runParam;
+};
+
+  // get NRT parameters
+var getNRTParam = function(sensor) {
+  var nrtParam = {
+    n: 4,
+    m: 5,
+    maxZ: 5,
+  };
+  if (sensor == 'Sentinel-2') {
+    nrtParam.band = 'NDFI';
+    nrtParam.z = 2;
+    nrtParam.c = 3;
+    nrtParam.d = 1;
+    nrtParam.r = 1;
+    nrtParam.cOnly = 0;
+    nrtParam.minSTD = 0.05;
+  } else if (sensor == 'Sentinel-1') {
+    nrtParam.band = 'VV';
+    nrtParam.z = 2;
+    nrtParam.c = 0;
+    nrtParam.d = 1;
+    nrtParam.r = 1;
+    nrtParam.cOnly = 0;
+    nrtParam.minSTD = 0.01;
+  } else if (sensor == 'MODIS') {
+    nrtParam.band = 'NDVI';
+    nrtParam.z = 2;
+    nrtParam.c = 0;
+    nrtParam.d = 1;
+    nrtParam.r = 1;
+    nrtParam.cOnly = 0;
+    nrtParam.minSTD = 0.05;
+  } else {
+    nrtParam.band = 'NDFI';
+    nrtParam.z = 2;
+    nrtParam.c = 0;
+    nrtParam.d = 1;
+    nrtParam.r = 1;
+    nrtParam.cOnly = 0;
+    nrtParam.minSTD = 0.05;
+  }
+  return nrtParam;
+};
+
+  // get image visualization parameters
+var getVisParam = function(sensor) {
+  var visParam = {};
+  if (sensor == 'Sentinel-2') {
+    visParam.bands = ['SWIR1', 'NIR', 'Red'];
+    visParam.min = 0;
+    visParam.max = 5000;
+  } else if (sensor == 'Sentinel-1') {
+    visParam.bands = ['VV', 'VH', 'ratio'];
+    visParam.min = 10;
+    visParam.max = 30;
+  } else if (sensor == 'MODIS') {
+    visParam.bands = ['SWIR', 'NIR', 'Red'];
+    visParam.min = 0;
+    visParam.max = 5000;
+  } else if (sensor == 'Mask') {
+    visParam.min = 0;
+    visParam.max = 1;
+    visParam.palette = ['blue'];
+  } else if (sensor == 'Alerts') {
+    visParam.min = convertDateFormat(ee.Date('2020-05-01'), 1).getInfo();
+    visParam.max = convertDateFormat(ee.Date('2020-11-01'), 1).getInfo();
+    visParam.palette = ['FF0080', 'EC1280', 'DA2480', 'C83680', 'B64880', 'A35B80', '916D80', 
+                        '7F7F80', '6D9180', '5BA380', '48B680', '36C880', '24DA80', '12EC80',
+                        '00FF80', '00EB89', '00D793', '00C49D', '00B0A7', '009CB0', '0089BA', 
+                        '0075C4', '0062CE', '004ED7', '003AE1', '0027EB', '0013F5', '0000FF'];
+  } else {
+    visParam.bands = ['B5', 'B4', 'B3'];
+    visParam.min = 0;
+    visParam.max = 5000;
+  }
+  return visParam;
+};
+
+  // get sentinel-1 processing parameters
+var getS1Param = function() {
+  var S1Param = {};
+  S1Param.focalSize = 3;
+  S1Param.kernelType = 'circle';
+  S1Param.bands =  ['VH','VV','ratio','angle'];
+  S1Param.orbit = 'Auto';
+  S1Param.model = 'Volume';
+  S1Param.rawPower = false;
+  S1Param.spatialNormalize = false,
+  S1Param.bufferSize = 20000;
+  S1Param.normScale = 10;
+  S1Param.fmask = 'projects/bu-nearrealtime/forest/forest_mask_hansen';
+  return S1Param;
+};
+
+  // get end members
+var endMembers = {
+  gv: [500, 900, 400, 6100, 3000, 1000],
+  npv: [1400, 1700, 2200, 3000, 5500, 3000],
+  soil: [2000, 3000, 3400, 5800, 6000, 5800],
+  shade: [0, 0, 0, 0, 0, 0],
+  cloud: [9000, 9600, 8000, 7800, 7200, 6500],
+  cfThreshold: 0.05
+  
+  //gv: [264, 832, 338, 4931, 1841, 754],
+  //npv: [192, 476, 929, 3007, 2613, 1243],
+  //soil: [803, 1199, 1414, 2094, 3134, 2487],
+  //shade: [0, 0, 0, 0, 0, 0],
+  //cloud: [1678, 1986, 1884, 4518, 3404, 2148],
+  //cfThreshold: 0.2
+};
+
+var convertDateFormat = function(date, format) {
+  if (format == 0) { 
+    var epoch = 719529;
+    var days = date.difference(ee.Date('1970-01-01'), 'day');
+    return days.add(epoch);
+  } else if (format == 1) {
+    var year = date.get('year');
+    var fYear = date.difference(ee.Date.fromYMD(year, 1, 1), 'year');
+    return year.add(fYear);
+  } else {
+    return date.millis();
+  }
+};
+
+// ---------------------------------------------------------------
+// Exports
+exports = {
+  getCCDParam: getCCDParam,
+  getRunParam: getRunParam,
+  getNRTParam: getNRTParam,
+  getVisParam: getVisParam,
+  trainPeriod: trainPeriod,
+  monitorPeriod: monitorPeriod,
+  fullPeriod: fullPeriod,
+  getS1Param: getS1Param,
+  endMembers: endMembers,
+  rtsPeriod: rtsPeriod
+};
+
+// End

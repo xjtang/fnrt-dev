@@ -1,0 +1,527 @@
+// Fusion Near Real-time
+// Near real-time monitoring of forest disturbance by fusion of multi-sensor data
+
+// Utilities for running a single pixel
+
+// ---------------------------------------------------------------
+// CCD Utilities
+var utCommon = require('users/xjtang/fnrt:Utilities/Common');
+var utParam = require('users/xjtang/fnrt:Utilities/Parameters');
+  
+  // generate a header list based on number of segments
+var genSegList = function(nSeg) {
+  var segList = ["dateString", "train", "monitor"];
+  for (var i = 0; i < nSeg; i++) {
+    segList.push("h".concat(i.toString()));
+  }
+  segList.push("fit");
+  return segList;
+};
+
+  // get CCD time series
+var getTimeSeries = function(train, monitor, ccd, geometry, dateFormat, band, padding) {
+  var proj = ee.Projection("EPSG:4326").atScale(10);
+  var ccdFits = ccd.reduceRegion({
+    reducer: ee.Reducer.first(), 
+    geometry: geometry, 
+    crs: proj});
+  var segment = ee.Number(0);
+  var coef = ee.Algorithms.If(
+                ccdFits.getArray(band + '_coefs'), 
+                ccdFits.getArray(band + '_coefs')
+                  .slice(0, segment, segment.add(1))
+                  .project([1]),
+                ee.Array([0, 0, 0, 0, 0, 0, 0, 0, 0]));
+  
+  function dateToSegment(t, fit) {
+    var tStart = ee.Array(fit.get('tStart'));
+    var tEnd = ee.Array(fit.get('tEnd'));
+    var segment = tEnd.gte(t).toList().indexOf(1);
+    var last = tStart.toList().length().subtract(1);
+    return ee.Number(ee.Algorithms.If(segment.add(1), segment, last));
+  }
+  
+  function produceTimeSeries(collection, geometry, band) {
+    if (padding) {
+      collection = collection.sort('system:time_start');
+      var first = collection.first();
+      var last = collection.sort('system:time_start', false).first();
+      var fakeDates = ee.List.sequence(first.date().get('year'), last.date().get('year'), padding)
+        .map(function(t) {
+        var fYear = ee.Number(t);
+        var year = fYear.floor();
+        return  ee.Date.fromYMD(year, 1, 1).advance(fYear.subtract(year), 'year')});
+      fakeDates = fakeDates.map(function(d) { 
+        return ee.Image().rename(band).set('system:time_start', ee.Date(d).millis())});
+      collection = collection.merge(fakeDates);
+    }    
+    collection = collection.sort('system:time_start');
+
+    var timeSeries = collection.map(function(img) {
+      var time = utCommon.convertDateFormat(img.date(), dateFormat);
+      //var segment = dateToSegment(time, ccdFits);
+      var value = img.select(band).reduceRegion({
+        reducer: ee.Reducer.first(), 
+        geometry: geometry,
+        crs: proj
+      }).getNumber(band);
+      var fit = harmonicFit(time, ee.Array(coef), dateFormat);
+      var residual = ee.Algorithms.If(value, fit.subtract(value), value);
+      return ee.Feature(geometry).set({
+        train: value,
+        x: value,
+        fitTime: time,
+        fit: fit,
+        segment: segment,
+        residual: residual,
+        dateString: img.date().format("YYYY-MM-dd"),
+        trainFitTime: time
+      }).set(segment.format("h%d"), fit);
+    });
+    return timeSeries;
+  }
+  
+  function produceMonitorData(collection, geometry, band) {
+    if (padding) {
+      collection = collection.sort('system:time_start');
+      var first = collection.first();
+      var last = collection.sort('system:time_start', false).first();
+      var fakeDates = ee.List.sequence(first.date().get('year'), last.date().get('year'), padding)
+        .map(function(t) {
+        var fYear = ee.Number(t);
+        var year = fYear.floor();
+        return  ee.Date.fromYMD(year, 1, 1).advance(fYear.subtract(year), 'year')});
+      fakeDates = fakeDates.map(function(d) { 
+        return ee.Image().rename(band).set('system:time_start', ee.Date(d).millis())});
+      collection = collection.merge(fakeDates);
+    }    
+    collection = collection.sort('system:time_start');
+    return collection.map(function(img) {
+      var time = utCommon.convertDateFormat(img.date(), dateFormat);
+      //var segment = dateToSegment(time, ccdFits);
+      var value = img.select(band).reduceRegion({
+        reducer: ee.Reducer.first(), 
+        geometry: geometry,
+        crs: proj
+      }).getNumber(band);
+      var fit = harmonicFit(time, ee.Array(coef), dateFormat);
+      var residual = ee.Algorithms.If(value, fit.subtract(value), value);
+      return ee.Feature(geometry).set({
+        monitor: value,
+        fitTime: time,
+        fit: fit,
+        segment: segment,
+        x: residual,
+        dateString: img.date().format("YYYY-MM-dd"),
+        monitorFitTime: time
+      }).set(segment.format("h%d"), fit);
+    });
+  }
+  
+  return produceTimeSeries(train, geometry, band)
+            .merge(produceMonitorData(monitor, geometry, band));
+};
+
+  // get CCD time series
+var getTimeSeries2 = function(train, monitorRes, ccd, geometry, dateFormat, band, res) {
+  var proj = ee.Projection("EPSG:4326").atScale(10);
+  var ccdFits = ccd.reduceRegion({
+    reducer: ee.Reducer.first(), 
+    geometry: geometry, 
+    crs: proj});
+  var segment = ee.Number(0);
+  var noModel = ee.Algorithms.If(
+                  ccdFits.getArray(band + '_coefs'), 
+                  0,
+                  1);
+  var coef = ee.Algorithms.If(
+                noModel, 
+                ee.Array([0, 0, 0, 0, 0, 0, 0, 0, 0]),
+                ccdFits.getArray(band + '_coefs')
+                  .slice(0, segment, segment.add(1))
+                  .project([1]));
+
+
+  function dateToSegment(t, fit) {
+    var tStart = ee.Array(fit.get('tStart'));
+    var tEnd = ee.Array(fit.get('tEnd'));
+    var segment = tEnd.gte(t).toList().indexOf(1);
+    var last = tStart.toList().length().subtract(1);
+    return ee.Number(ee.Algorithms.If(segment.add(1), segment, last));
+  }
+
+  function produceTimeSeries(collection, geometry, band) {
+    collection = collection.sort('system:time_start');
+    var timeSeries = collection.map(function(img) {
+      var time = utCommon.convertDateFormat(img.date(), dateFormat);
+      //var segment = dateToSegment(time, ccdFits);
+      var value = img.select(band).reduceRegion({
+        reducer: ee.Reducer.first(), 
+        geometry: geometry,
+        crs: proj
+      }).getNumber(band);
+      var fit = ee.Number(ee.Algorithms.If(noModel,
+                  value,
+                  harmonicFit(time, ee.Array(coef), dateFormat)));
+      var residual = ee.Algorithms.If(value, fit.subtract(value), value);
+      return ee.Feature(geometry).set({
+        train: value,
+        x: value,
+        fitTime: time,
+        fit: fit,
+        segment: segment,
+        residual: residual,
+        dateString: img.date().format("YYYY-MM-dd"),
+        trainFitTime: time
+      }).set(segment.format("h%d"), fit);
+    });
+    return timeSeries;
+  }
+  
+  function produceMonitorData(collection, geometry) {
+    collection = collection.sort('system:time_start');
+    return collection.map(function(img) {
+      var time = utCommon.convertDateFormat(img.date(), dateFormat);
+      //var segment = dateToSegment(time, ccdFits);
+      var residual = img.select('residual').reduceRegion({
+        reducer: ee.Reducer.first(), 
+        geometry: geometry,
+        crs: proj
+      }).getNumber('residual');
+      return ee.Feature(geometry).set({
+        monitor: 0,
+        fitTime: time,
+        fit: 0,
+        segment: segment,
+        x: residual,
+        dateString: img.date().format("YYYY-MM-dd"),
+        monitorFitTime: time
+      }).set(segment.format("h%d"), 0);
+    });
+  }
+  
+  return produceTimeSeries(train, geometry, band)
+          .merge(produceMonitorData(monitorRes, geometry));
+};
+
+  // convert CCD time series to a table for charting
+var getCCDTable = function(ccdTS, segList) {
+  var listLen = segList.length;
+  return ccdTS.reduceColumns(ee.Reducer.toList(listLen, listLen), segList).get('list');
+};
+
+  // make a CCD chart
+var getCCDChart = function(table, band, lat, lon, nSeg) {
+  function getLetter(x){
+    var alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    var charCode = alphabet.charCodeAt(x);
+    return String.fromCharCode(charCode);
+  }
+  
+  function genDict(letter, index) {
+    var fitName = 'fit '.concat(index.toString());
+    return {id: letter, label: fitName, type: 'number'};
+  }
+  
+  function formatTable(table) {
+    var cols = [{id: 'A', label: 'Date', type: 'date'},
+            {id: 'B', label: 'Training', type: 'number'},
+            {id: 'C', label: 'Monitoring', type: 'number'}];
+    for (var i = 1; i <= nSeg; i++) {
+      var dict = genDict(getLetter(i+2), i);
+      cols.push(dict);
+    }
+    var values = table.map(function(list) {
+      return {c: list.map(function(item, index) {
+        return {"v": index == 0 ? new Date(item): item};
+      })};
+    });
+    return {cols: cols, rows: values};
+  }
+  
+  function getLimits(table, column) {
+    var col = table.map(function(l){return [l[1], l[2]]});
+    var col2 = [].concat.apply([], col).filter(function(i){return i != null});;
+    return [Math.min.apply(Math, col2), Math.max.apply(Math, col2)];
+  }
+  
+  var formatted = formatTable(table);
+  var limit = getLimits(table, 3);
+  var range = limit[1] - limit[0];
+  var vw = null;
+  if (range < 0.001){vw = {min: limit[0]+50, max: limit[1]-50}}
+
+  var chart = ui.Chart(formatted, 'LineChart', {
+        title: 'Pixel located at ' + lat.toFixed(3) + ', ' + lon.toFixed(3),
+        pointSize: 0,
+        series: {
+          0: { pointSize: 1.8, lineWidth: 0},
+          1: { pointSize: 1.8, lineWidth: 0}
+        },
+        vAxis: {
+          title: 'Surface reflectance (' + band + ')',
+          viewWindow: vw,
+          viewWindowMode: 'explicit'
+        },
+        height: '90%',
+        stretch: 'both'
+  });
+  return chart;
+};
+
+  // harmonic fitting
+var harmonicFit = function(t, coef, dateFormat) {
+  var PI2 = 2.0 * Math.PI;
+  var OMEGAS = [PI2 / 365.25, PI2, PI2 / (1000 * 60 * 60 * 24 * 365.25)];
+  var omega = OMEGAS[dateFormat];
+  return coef.get([0])
+    .add(coef.get([1]).multiply(t))
+    .add(coef.get([2]).multiply(t.multiply(omega).cos()))
+    .add(coef.get([3]).multiply(t.multiply(omega).sin()))
+    .add(coef.get([4]).multiply(t.multiply(omega * 2).cos()))
+    .add(coef.get([5]).multiply(t.multiply(omega * 2).sin()))
+    .add(coef.get([6]).multiply(t.multiply(omega * 3).cos()))
+    .add(coef.get([7]).multiply(t.multiply(omega * 3).sin()));
+};
+
+// ---------------------------------------------------------------
+// NRT Utilities
+  // run near real time monitoring
+var runNRT = function(train, monitor, pixel, ccdParam, runParam, nrtParam) {
+  // var ccd = utCommon.runCCD(ccdParam, train);
+  var ccd = utCommon.runCCD2(train, utParam.trainPeriod, runParam.band, ccdParam.dateFormat);
+  var ccdTS = getTimeSeries(train, monitor, ccd, pixel, ccdParam.dateFormat, nrtParam.band);
+  var nrtTS = checkZ(addZ(ccdTS, nrtParam.c, nrtParam.maxZ, nrtParam.minSTD), nrtParam).filterMetadata('x', 'not_equals', null);
+  var nrtMonitor = ee.ImageCollection(getNRTMonitor(nrtTS, nrtParam));
+  var nrtList = ["dateString", "Z_train", "Ball", 'Strike', 'StrikeOut'];
+  var nrtTable = getCCDTable(nrtMonitor, nrtList);
+  return nrtTable;
+};
+
+  // calculate Z scores
+var addZ = function(timeSeries, threshold, maxZ, minSTD){
+  var residuals = timeSeries.aggregate_array('residual');
+  var values = timeSeries.aggregate_array('train');
+  
+  var filter = function(res, threshold) {
+    var mean = ee.Number(res.reduce(ee.Reducer.mean()));
+    var sd = ee.Number(res.reduce(ee.Reducer.stdDev()));
+    return res.filter(ee.Filter.rangeContains('item', 
+                      mean.subtract(sd.multiply(threshold)), 
+                      mean.add(sd.multiply(threshold))));
+  };
+  
+  var residuals2 = ee.List(ee.Algorithms.If(
+    threshold,
+    filter(residuals, threshold),
+    residuals
+  ));
+  var mean = residuals2.reduce(ee.Reducer.mean());
+  var minSD = ee.Number(values.reduce(ee.Reducer.mean())).abs().multiply(minSTD);
+  var sd = ee.Number(residuals2.reduce(ee.Reducer.stdDev())).max(minSD);
+
+  return timeSeries.map(function(img) {
+    var x = img.get('x');
+    var residual = img.get('residual');
+    var train = img.get('trainFitTime');
+    return ee.Algorithms.If(
+      train, 
+      img.set({Z_train: ee.Number(ee.Algorithms.If(
+        ee.Number(residual).subtract(mean).divide(sd).gt(maxZ),
+        maxZ,
+        ee.Number(residual).subtract(mean).divide(sd)))}),
+      ee.Algorithms.If(
+        x,
+        img.set({Z_monitor: ee.Number(ee.Algorithms.If(
+          ee.Number(x).subtract(mean).divide(sd).gt(maxZ),
+          maxZ,
+          ee.Number(x).subtract(mean).divide(sd)))}),
+        img));
+  });
+};
+
+  // calculate Z scores with baseline
+var addZ2 = function(timeSeries, threshold, nrt, geometry, maxZ, minSTD){
+  var proj = ee.Projection("EPSG:4326").atScale(10);
+  var nrtValues = nrt.unmask().reduceRegion({
+    reducer: ee.Reducer.first(), 
+    geometry: geometry, 
+    crs: proj});
+  var mean = ee.Number(nrtValues.get('meanRes'));
+  var sd = ee.Number(nrtValues.get('stdRes'))
+            .max(ee.Number(nrtValues.get('meanValue')).abs().multiply(minSTD));
+
+  return timeSeries.map(function(img) {
+    var x = img.get('x');
+    var residual = img.get('residual');
+    var train = img.get('trainFitTime');
+    return ee.Algorithms.If(
+      train, 
+      img.set({Z_train: ee.Number(ee.Algorithms.If(
+        ee.Number(residual).subtract(mean).divide(sd).gt(maxZ),
+        maxZ,
+        ee.Number(residual).subtract(mean).divide(sd)))}),
+      ee.Algorithms.If(
+        x,
+        img.set({Z_monitor: ee.Number(ee.Algorithms.If(
+          ee.Number(x).subtract(mean).divide(sd).gt(maxZ),
+          maxZ,
+          ee.Number(x).subtract(mean).divide(sd)))}),
+        img));
+  });
+};
+
+  // check z against threhold
+var checkZ = function(timeSeries, nrtParam) {
+  var call = function(x, threshold, direction) {
+    return ee.Algorithms.If(
+      direction,
+      ee.Algorithms.If(
+        ee.Number(direction).eq(1),
+        ee.Number(x).gt(threshold),
+        ee.Number(x).multiply(-1).gt(threshold)),
+      ee.Number(x).abs().gt(threshold));
+  };
+  
+  return timeSeries.map(function(img) {
+    var x = img.get('Z_monitor');
+    return ee.Algorithms.If(
+      x,
+      ee.Algorithms.If(
+        call(x, nrtParam.z, nrtParam.d),
+        img.set({Strike: x}),
+        img.set({Ball: x})
+        ),
+      img);
+  });
+};
+
+  // near real time monitoring (server)
+var getNRTMonitor = function(nrt, nrtParam) {
+  var flag = nrtDetect(nrt, nrtParam);
+  return ee.Algorithms.If(
+    flag.gt(0),
+    nrt.map(function(img){
+      var date = img.get('fitTime');
+      var z = img.get('Strike');
+      return ee.Algorithms.If(
+        flag.eq(date),
+        img.set({StrikeOut: z, Strike: null}),
+        img
+      );
+    }),
+    nrt
+  );
+};
+
+  // detect change (server)
+var nrtDetect = function(monitored, nrtParam) {
+  return ee.Number(ee.List(monitored.iterate(function(img, flags){
+    flags = ee.List(flags);
+    return ee.Algorithms.If(
+      ee.Number(flags.get(-1)).gt(1),
+      flags,
+      ee.Algorithms.If(
+        img.get('Strike'),
+        ee.Algorithms.If(
+          flags.slice(1).add(1).frequency(1).gte(nrtParam.n),
+          flags.add(img.get('fitTime')),
+          flags.slice(1).add(1)
+        ),
+        flags.slice(1).add(0)
+      )
+    );
+  }, ee.List.repeat(0, nrtParam.m))).get(-1));
+};
+
+  // detect change (local)
+var nrtDetect2 = function(monitored, nrtParam) {
+  var strikes = getCCDTable(monitored.filterMetadata('x', 'not_equals', null), 
+                            ['fitTime', 'Strike']).getInfo();
+  for (var i = nrtParam.m; i <= strikes.length; i++) {
+    var nStrike = strikes.slice(i-nrtParam.m, i)
+                          .map(function(x){return x[1]})
+                          .filter(Boolean).length;
+    if (nStrike >= nrtParam.n) {
+      return ee.Number(strikes[i-1][0]);
+    }
+  }
+  return ee.Number(0);
+};
+
+  // make a NRT chart
+var getNRTChart = function(table, band, lat, lon) {
+  function formatTable(table) {
+    var cols = [{id: 'A', label: 'Date', type: 'date'},
+            {id: 'B', label: 'Training', type: 'number'},
+            {id: 'C', label: 'Ball', type: 'number'},
+            {id: 'D', label: 'Strike', type: 'number'},
+            {id: 'E', label: 'StrikeOut', type: 'number'}];
+    var values = table.map(function(list) {
+      return {c: list.map(function(item, index) {
+        return {"v": index == 0 ? new Date(item): item};
+      })};
+    });
+    return {cols: cols, rows: values};
+  }
+  
+  var formatted = formatTable(table);
+  var chart = ui.Chart(formatted, 'ScatterChart', {
+        title: 'Pixel located at ' + lat.toFixed(3) + ', ' + lon.toFixed(3),
+        pointSize: 1.8,
+        vAxis: {
+          title: 'Z Score (' + band + ')',
+          viewWindowMode: 'explicit',
+        },
+        height: '90%',
+        stretch: 'both'
+  });
+  return chart;
+};
+
+  // make a non-tracking NRT chart
+var getNRTChart2 = function(table, band, lat, lon) {
+  function formatTable(table) {
+    var cols = [{id: 'A', label: 'Date', type: 'date'},
+            {id: 'B', label: 'Training', type: 'number'},
+            {id: 'C', label: 'Monitoring', type: 'number'}];
+    var values = table.map(function(list) {
+      return {c: list.map(function(item, index) {
+        return {"v": index == 0 ? new Date(item): item};
+      })};
+    });
+    return {cols: cols, rows: values};
+  }
+  
+  var formatted = formatTable(table);
+  var chart = ui.Chart(formatted, 'ScatterChart', {
+        title: 'Pixel located at ' + lat.toFixed(3) + ', ' + lon.toFixed(3),
+        pointSize: 1.8,
+        vAxis: {
+          title: 'Z Score (' + band + ')',
+          viewWindowMode: 'explicit',
+        },
+        height: '90%',
+        stretch: 'both'
+  });
+  return chart;
+};
+
+// ---------------------------------------------------------------
+// Exports
+exports = {
+  runNRT: runNRT,
+  getTimeSeries: getTimeSeries,
+  getTimeSeries2: getTimeSeries2,
+  genSegList: genSegList,
+  addZ: addZ,
+  addZ2: addZ2,
+  checkZ: checkZ,
+  getNRTMonitor: getNRTMonitor,
+  getCCDTable: getCCDTable,
+  getCCDChart: getCCDChart,
+  getNRTChart: getNRTChart,
+  getNRTChart2: getNRTChart2
+};
+
+// End

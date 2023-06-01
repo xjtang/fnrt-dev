@@ -1,0 +1,292 @@
+// Fusion Near Real-time
+// Near real-time monitoring of forest disturbance by fusion of multi-sensor data
+
+// Utilities for running an area
+
+// ---------------------------------------------------------------
+// CCD Utilities
+var utCommon = require('users/xjtang/fnrt:Utilities/Common');
+
+var genSegTag = function(nSeg) {
+  return ee.List.sequence(1, nSeg).map(function(i) {
+    return ee.String('S').cat(ee.Number(i).int())});
+};
+
+  // reformat ccd results to ccd images
+var getCCDImage = function(ccd, nSeg, band) {
+  band = band + '_';
+  
+  var genCoefImg = function(ccd, nSeg, band, coef) {
+    var segs = genSegTag(nSeg);
+    var zeros = ee.Array(0).repeat(0, nSeg);
+    var coefImg = ccd.select(band + coef).arrayCat(zeros, 0).float().arraySlice(0, 0, nSeg);
+    var tags = segs.map(function(x) {
+      return ee.String(x).cat('_').cat(band).cat(coef)});
+    return ee.Image(coefImg.arrayFlatten([tags]));
+  };
+  
+  var genHarmImg = function(ccd, nSeg, band) {
+    var harms = ['INTP', 'SLP', 'COS', 'SIN', 'COS2', 'SIN2', 'COS3', 'SIN3'];
+    var segs = genSegTag(nSeg);
+    var zeros = ee.Image(ee.Array([ee.List.repeat(0, harms.length)])).arrayRepeat(0, nSeg);
+    var coefImg = ccd.select(band + 'coefs').arrayCat(zeros, 0).float().arraySlice(0, 0, nSeg);
+    var tags = segs.map(function(x) {
+      return ee.String(x).cat('_').cat(band).cat('coef')});
+    return ee.Image(coefImg.arrayFlatten([tags, harms]));
+  };
+  
+  //var magnitude = genCoefImg(ccd, nSeg, band, 'magnitude');
+  //var rmse = genCoefImg(ccd, nSeg, band, 'rmse');
+  //var tStart = genCoefImg(ccd, nSeg, '', 'tStart');
+  //var tEnd = genCoefImg(ccd, nSeg, '', 'tEnd');
+  //var tBreak = genCoefImg(ccd, nSeg, '', 'tBreak');
+  //var probs = genCoefImg(ccd, nSeg, '', 'changeProb');
+  var coef = genHarmImg(ccd, nSeg, band);
+  return coef;
+  //return ee.Image.cat(rmse, coef);//, tStart, tEnd, tBreak);
+};
+
+  // get CCD time series for an area
+var getTimeSeries = function(data, ccd, band, nSeg, sensor, dateFormat) {
+  var genSyntImg = function(ccd, img, band, nSeg, sensor, dateFormat) {
+    var date = utCommon.convertDateFormat(ee.Date(img.get('system:time_start')), dateFormat);
+    var dateString = ee.Date(img.get('system:time_start')).format('yyyyMMdd');
+    var coefs = ["INTP", "SLP", "COS", "SIN", "COS2", "SIN2", "COS3", "SIN3"];
+    var segs = genSegTag(nSeg);
+    var coef = ee.Image(coefs.map(function(coef){return getCoef(ccd, date, band, coef, segs)})).rename(coefs);
+    var t = ee.Number(date);
+    var PI2 = 2.0 * Math.PI;
+    var OMEGAS = [PI2 / 365.25, PI2, PI2 / (1000 * 60 * 60 * 24 * 365.25)];
+    var omega = OMEGAS[dateFormat];
+    var synt = ee.Image.constant([1, t, t.multiply(omega).cos(),
+                                      t.multiply(omega).sin(),
+                                      t.multiply(omega * 2).cos(),
+                                      t.multiply(omega * 2).sin(),
+                                      t.multiply(omega * 3).cos(),
+                                      t.multiply(omega * 3).sin()]).float();
+    return synt.multiply(coef).reduce('sum').addBands(img, [band]).rename(['synt', band])
+              .set({'sensor': sensor, 'system:time_start': img.get('system:time_start'), 'dateString': dateString});
+  };
+  
+  var getCoef = function(ccd, date, band, coef, segs){
+    //var tStart = ccd.select(".*_tStart").rename(segs);
+    //var coefs = ccd.select(".*".concat(band).concat(".*").concat(coef));
+    //var segment = tStart.selfMask().lte(ee.Number(date)).selfMask();
+    //var segment = ee.Image(1);
+    //return coefs.updateMask(segment).reduce(ee.Reducer.lastNonNull());
+    return ccd.select(".*".concat(band).concat(".*").concat(coef));
+  };
+  
+  return ee.ImageCollection(data.map(function(img){
+    return genSyntImg(ccd, img, band, nSeg, sensor, dateFormat);
+  }));
+};
+
+// ---------------------------------------------------------------
+// NRT Utilities
+var spatialFilter = function(alerts, realtime) {
+  var change = alerts.unmask().gt(0);
+  if (realtime) {
+    var windowMean = change.reduceNeighborhood({
+      reducer: ee.Reducer.mean(),
+      kernel: ee.Kernel.square(alerts.projection().nominalScale(), 'meters')
+    });
+    return alerts.multiply(windowMean.gt(1/4)).selfMask();
+  } else {
+    var windowMean = change.reduceNeighborhood({
+      reducer: ee.Reducer.sum(),
+      kernel: ee.Kernel.square(2.5, 'pixels', false)
+    });
+    return alerts.multiply(windowMean.gt(2)).selfMask();
+  }
+};
+
+var getResiduals = function(data, band) {
+  return ee.ImageCollection(data.map(function(img) {
+    return img.select('synt').where(img.select('synt').gt(10000), 10000)
+              .subtract(img.select(band)).rename('residual')
+              .set({'sensor': img.get('sensor'), 'system:time_start': img.get('system:time_start'),
+                    'dateString': img.get('dateString')});
+  })); 
+};
+
+var getZ = function(data, meanRes, stdRes, meanValue, nrtParam) {
+  var getStrike = function(z, threshold, direction) {
+    return ee.Algorithms.If(
+        direction,
+        ee.Algorithms.If(
+          ee.Number(direction).eq(1),
+          z.gt(threshold),
+          z.multiply(-1).gt(threshold)  
+        ),
+        z.abs().gt(threshold)
+      );
+  };
+  
+  var getRestore = function(z, threshold, flag) {
+    return ee.Algorithms.If(
+        flag,
+        z.abs().lte(threshold),
+        ee.Image(0)
+      );
+  };
+  
+  return ee.ImageCollection(data.map(function(img) {
+    var z = img.subtract(meanRes).divide(stdRes.max(meanValue.abs().multiply(nrtParam.minSTD)));
+    var strike = z.multiply(getStrike(z, nrtParam.z, nrtParam.d));
+    var restore = z.multiply(getRestore(z, nrtParam.z, nrtParam.r));
+    var zStack = ee.Image.cat(z, strike, restore).rename(['z', 'strike','restore'])
+                    .set({'sensor': img.get('sensor'), 'system:time_start': img.get('system:time_start')});
+    return ee.Image(ee.Algorithms.If(
+              nrtParam.cOnly,
+              zStack.updateMask(strike.gt(0)),
+              zStack
+      ));
+  })); 
+};
+
+  // calculate z values
+var getNRT = function(train, monitor, nrtParam, baseline) {
+  var getResMean = function(residuals) {
+    return residuals.reduce(ee.Reducer.mean(), 4).rename('residual_mean');
+  };
+  
+  var getResStd = function(residuals) {
+    return residuals.reduce(ee.Reducer.stdDev(), 4).rename('residual_std');
+    //return res.max(minSTD);
+    //return res.where(res.lt(nrtParam.minSTD), nrtParam.minSTD).rename('residual_std');
+  };
+  
+  var filterRes = function(residuals, threshold) {
+    var mean = getResMean(residuals);
+    var sd = getResStd(residuals);
+    var upper = mean.add(sd.multiply(threshold));
+    var lower = mean.subtract(sd.multiply(threshold));
+    return ee.ImageCollection(residuals.map(function(img){
+      return img.updateMask(img.lte(upper).and(img.gte(lower)));
+    }));
+  };
+  
+  var trainRes = getResiduals(train, nrtParam.band);
+  var meanValue = train.select(nrtParam.band).mean();
+  var trainResFiltered = ee.ImageCollection(ee.Algorithms.If(
+    nrtParam.c,
+    filterRes(trainRes, nrtParam.c),
+    trainRes
+  ));
+  var meanRes = getResMean(trainResFiltered);
+  var stdRes = getResStd(trainResFiltered);
+  
+  if (baseline) {
+    return meanRes.addBands(stdRes).addBands(meanValue).rename(['meanRes', 'stdRes', 'meanValue']);
+  } else {
+    var monitorRes = getResiduals(monitor, nrtParam.band);
+    return getZ(monitorRes, meanRes, stdRes, meanValue, nrtParam);
+  }
+};
+
+var nrtMonitor = function(nrt, nrtParam) {
+  var zeros = ee.Image(0).addBands(ee.Image(0)).rename(['change', 'date']);
+  var shift = Math.pow(2, nrtParam.m - 1) - 1;
+  
+  var monitor = function(img, result) {
+    var change = ee.Image(result).select('change');
+    var date = ee.Image(result).select('date');
+    var shiftImg = img.select('z').mask().eq(0).multiply(shift+1).add(shift);
+    change = change.bitwiseAnd(shiftImg).multiply(shiftImg.eq(shift).add(1))
+                    .add(img.select('strike').unmask().gt(0));
+    date = date.add(change.bitCount().gte(nrtParam.n).multiply(date.eq(0))
+                .multiply(ee.Number(utCommon.convertDateFormat(ee.Date(img.get('system:time_start')), 1))));
+    return(change.addBands(date));
+  };
+  
+  return ee.Image(nrt.iterate(monitor, zeros)).select('date').rename('Alerts').selfMask();
+};
+
+var nrtMonitor2 = function(nrt, nrtParam) {
+  var genTags = function(pre, m) {
+    var tagList = [];
+    for (var i = 1; i <= m; i++) {
+      tagList.push(pre.concat(i.toString()));
+    }
+    return tagList;
+  };
+  
+  var stretch = function(max, which) {
+    return ee.ImageCollection(ee.List.sequence(1, max).map(function(i) {
+      return which.eq(ee.Number(i)).set({seq: i});
+    })).sort('seq').toBands();
+  };
+  
+  // Initialize
+  var zs = ee.Image.constant(ee.List.repeat(0, nrtParam.m)).rename(genTags('z', nrtParam.m));
+  var rs = ee.Image.constant(ee.List.repeat(0, nrtParam.m)).rename(genTags('r', nrtParam.m));
+  var dates = ee.Image.constant(ee.List.repeat(3000, nrtParam.m)).rename(genTags('date', nrtParam.m));
+  var change = ee.Image(0).rename('change');
+  var doc = ee.Image(0).rename('doc');
+  var dod = ee.Image(0).rename('dod');
+  var dor = ee.Image(0).rename('dor');
+  var which = ee.Image(1).rename('which');
+  var stack = zs.addBands(rs).addBands(dates).addBands(change).addBands(doc).addBands(dod).addBands(dor).addBands(which);
+
+  var monitor = function(img, stack) {
+    // grab layers
+    var z = img.select('strike'); 
+    var zs = ee.Image(stack).select('z.*');
+    var r = img.select('restore'); 
+    var rs = ee.Image(stack).select('r.*');
+    var dates = ee.Image(stack).select('date.*');
+    var change = ee.Image(stack).select('change');
+    var doc = ee.Image(stack).select('doc');
+    var dod = ee.Image(stack).select('dod');
+    var dor = ee.Image(stack).select('dor');
+    var which = ee.Image(stack).select('which');
+    var mask = z.mask().gt(0);
+    z = z.unmask();
+    r = r.unmask();
+    
+    // update flag
+    var thisDate = ee.Number(utCommon.convertDateFormat(ee.Date(z.get('system:time_start')), 1));
+    //var thisDate = ee.Number(z.get('system:time_start'));
+    var which2 = stretch(nrtParam.m, which);
+    zs = zs.multiply(which2.eq(0).or(mask.not())).add(which2.multiply(mask).multiply(z));
+    rs = rs.multiply(which2.eq(0).or(mask.not())).add(which2.multiply(mask).multiply(r));
+    dates = dates.multiply(which2.eq(0).or(mask.not())).add(which2.multiply(mask).multiply(thisDate));
+    which = which.add(mask);
+    which = which.subtract(which.gt(nrtParam.m).multiply(nrtParam.m));
+    
+    // check
+    var nrtSum = zs.gt(0).reduce('sum');
+    var rcvSum = rs.gt(0).reduce('sum');
+    var changed = nrtSum.gte(nrtParam.n).multiply(change.eq(0));
+    var restored = rcvSum.gte(nrtParam.m).multiply(change.eq(1));
+    
+    // update change
+    change = change.add(changed).add(restored);
+    dod = dod.add(changed.multiply(thisDate));
+    doc = doc.add(changed.multiply(dates.reduce('min')));
+    dor = dor.add(restored.multiply(thisDate));
+    
+    return zs.addBands(rs).addBands(dates).addBands(change).addBands(doc).addBands(dod).addBands(dor).addBands(which);
+  };
+  //return ee.Image(nrt.iterate(monitor, stack))
+  var results = ee.Image(nrt.iterate(monitor, stack))
+                  .select(['change', 'doc', 'dod', 'dor'])
+                  .rename(['ChangeFlag','ChangeDate', 'DetectionDate', 'RestoreDate']);
+  return results.updateMask(results.select('ChangeFlag').gt(0));
+};
+
+// ---------------------------------------------------------------
+// Exports
+exports = {
+  getTimeSeries: getTimeSeries,
+  getCCDImage: getCCDImage,
+  getZ: getZ,
+  nrtMonitor: nrtMonitor,
+  nrtMonitor2: nrtMonitor2,
+  getResiduals: getResiduals,
+  getNRT: getNRT,
+  spatialFilter: spatialFilter
+};
+
+// End

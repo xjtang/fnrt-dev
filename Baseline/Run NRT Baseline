@@ -1,0 +1,78 @@
+// Fusion Near Real-time
+// Near real-time monitoring of forest disturbance by fusion of multi-sensor data
+
+// Produce baseline TS
+
+// ---------------------------------------------------------------
+// Imports and predefined variables:
+var utArea = require('users/xjtang/fnrt:Utilities/Area');
+var utParam = require('users/xjtang/fnrt:Utilities/Parameters');
+var utCommon = require('users/xjtang/fnrt:Utilities/Common');
+var trainPeriod = utParam.trainPeriod;
+var studyArea = ee.FeatureCollection('projects/bu-nearrealtime/areas/test_sites');
+var asset_location = 'projects/bu-nearrealtime/baselines/';
+var output_location = 'projects/bu-nearrealtime/baselines/nrt/';
+
+// ---------------------------------------------------------------
+// Main functions:
+var saveNRT = function(ts, des, name, region, res) {
+  Export.image.toAsset({
+        image: ts,
+        scale: res,
+        description: des,
+        assetId: output_location + name,
+        region: region,
+        maxPixels: 1e13});
+};
+
+var runNRT = function(sensor, area, res) {
+  var areaID = area.getString('id').getInfo();
+  var geometry = area.geometry();
+  var sensor_short = utCommon.sensorToShort(sensor);
+  var ccdParam = utParam.getCCDParam(sensor);
+  var runParam = utParam.getRunParam(sensor);
+  var nrtParam = utParam.getNRTParam(sensor);
+  var train = utCommon.getData(geometry, trainPeriod, sensor, true);
+  var ccd = ee.ImageCollection(asset_location + 'ccd')
+              .filterMetadata('sensor', 'equals', sensor)
+              .filterMetadata('region', 'equals', areaID).first();
+  var ccdImg = utArea.getCCDImage(ccd, runParam.nSeg, nrtParam.band);
+  var trainTS = utArea.getTimeSeries(train, ccdImg, nrtParam.band, runParam.nSeg, sensor, ccdParam.dateFormat);
+  var nrt = utArea.getNRT(trainTS, ee.Image(0), nrtParam, true).set({region: areaID, sensor: sensor});
+  var des = areaID + '_' + sensor_short + '_NRT';
+  var name = areaID + '_' + sensor_short + '_NRT';
+  saveNRT(nrt, des, name, geometry, res);
+};
+
+// ---------------------------------------------------------------
+// UIs:
+  // menu panel
+var runButton = ui.Button('RunNRT');
+var sensorSelect = ui.Select(['Landsat', 'Sentinel-2', 'Sentinel-1', 'MODIS'], 'Select sensor for CCD.', 'Landsat');
+var menuSet = ui.Panel([runButton, sensorSelect], ui.Panel.Layout.Flow('horizontal'));
+var menuPanel = ui.Panel({
+  widgets: [menuSet],
+  style: {position: 'top-center', width: '180px'}
+});
+
+// ---------------------------------------------------------------
+// Runtime functions:
+runButton.onClick(function() {
+  var sensor = sensorSelect.getValue();
+  var res = utParam.getRunParam(sensor).res;
+  var areas = studyArea.toList(30);
+  var nArea = studyArea.size().getInfo();
+  for (var i = 0; i < nArea; i++) {
+    var area = ee.Feature(areas.get(i));
+    runNRT(sensor, area, res);
+  }
+});
+
+// ---------------------------------------------------------------
+// Initialization:
+Map.add(menuPanel);
+Map.setCenter(-61.18418807329864, -6.3470237218092995, 6);
+Map.setOptions('SATELLITE');
+Map.addLayer(studyArea, {color: 'red'}, 'Study Area', true);
+
+// End

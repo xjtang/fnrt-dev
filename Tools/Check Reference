@@ -1,0 +1,92 @@
+var addZone = function(col, zone) {
+  return ee.FeatureCollection(col.map(function(x){
+    return x.set({zone: zone});
+  }));
+};
+
+var A1X1Y1 = addZone(ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A1X1Y1_done'), 'A1X1Y1');
+var A2X1Y1 = addZone(ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A2X1Y1_done'), 'A2X1Y1');
+var A3X1Y1 = addZone(ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A3X1Y1_done'), 'A3X1Y1');
+var A4X1Y1 = addZone(ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A4X1Y1_done'), 'A4X1Y1');
+var A5X1Y1 = addZone(ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A5X1Y1_done'), 'A5X1Y1');
+var A5X2Y1 = addZone(ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A5X2Y1_done'), 'A5X2Y1');
+var A6X1Y1 = addZone(ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A6X1Y1_done'), 'A6X1Y1');
+var A7X1Y1 = addZone(ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A7X1Y1_done'), 'A7X1Y1');
+
+var ref = A1X1Y1.merge(A2X1Y1).merge(A3X1Y1).merge(A4X1Y1).merge(A5X1Y1).merge(A5X2Y1).merge(A6X1Y1).merge(A7X1Y1);
+print(ref);
+Map.addLayer(ref);
+
+var alerts = ee.ImageCollection('projects/bu-nearrealtime/results/alerts');
+//print(alerts);
+
+var lst = alerts.filterMetadata('sensor', 'equals', 'LST').mosaic();
+var s2 = alerts.filterMetadata('sensor', 'equals', 'S2').mosaic();
+var s1 = alerts.filterMetadata('sensor', 'equals', 'S1').mosaic();
+var opt = alerts.filterMetadata('sensor', 'equals', 'S2LST').mosaic();
+var all = alerts.filterMetadata('sensor', 'equals', 'S2S1LST').mosaic();
+var lst2 = alerts.filterMetadata('sensor', 'equals', 'EXT').mosaic();
+var glad = ee.Image('projects/glad/alert/UpdResult/01_01_SA').select('alertDate20').rename('glad');
+//print(lst);
+//print(s2);
+//print(s1);
+//print(opt);
+//print(all);
+//print(lst2);
+
+//var a = ref.first();
+//print(a);
+//var b = lst.reduceRegion(ee.Reducer.first(), a.geometry(), 30);
+//print(b);
+
+// extract map values to reference dataset
+var extract = function(ref) {
+  return ee.FeatureCollection(ref.map(function(sample){
+    var sample_lst = lst.reduceRegion(ee.Reducer.first(), sample.geometry(), 30);
+    var sample_s2 = s2.reduceRegion(ee.Reducer.first(), sample.geometry(), 10);
+    var sample_s1 = s1.reduceRegion(ee.Reducer.first(), sample.geometry(), 10);
+    var sample_opt = opt.reduceRegion(ee.Reducer.first(), sample.geometry(), 10);
+    var sample_all = all.reduceRegion(ee.Reducer.first(), sample.geometry(), 10);
+    var sample_lst2 = lst2.reduceRegion(ee.Reducer.first(), sample.geometry(), 30);
+    var sample_glad = glad.reduceRegion(ee.Reducer.first(), sample.geometry(), 30);
+
+    return sample.set({
+      LCDate: sample_lst.get('ChangeDate'),
+      LCFlag: sample_lst.get('ChangeFlag'),
+      LDDate: sample_lst.get('DetectionDate'),
+      LFilter: sample_lst.get('Filtered'),
+      LRDate: sample_lst.get('RestoreDate'),
+      S1CDate: sample_s1.get('ChangeDate'),
+      S1CFlag: sample_s1.get('ChangeFlag'),
+      S1DDate: sample_s1.get('DetectionDate'),
+      S1Filter: sample_s1.get('Filtered'),
+      S1RDate: sample_s1.get('RestoreDate'),
+      S2CDate: sample_s2.get('ChangeDate'),
+      S2CFlag: sample_s2.get('ChangeFlag'),
+      S2DDate: sample_s2.get('DetectionDate'),
+      S2Filter: sample_s2.get('Filtered'),
+      S2RDate: sample_s2.get('RestoreDate'),
+      OCDate: sample_opt.get('ChangeDate'),
+      OCFlag: sample_opt.get('ChangeFlag'),
+      ODDate: sample_opt.get('DetectionDate'),
+      OFilter: sample_opt.get('Filtered'),
+      ORDate: sample_opt.get('RestoreDate'),
+      ACDate: sample_all.get('ChangeDate'),
+      ACFlag: sample_all.get('ChangeFlag'),
+      ADDate: sample_all.get('DetectionDate'),
+      AFilter: sample_all.get('Filtered'),
+      ARDate: sample_all.get('RestoreDate'),
+      LECDate: sample_lst2.get('ChangeDate'),
+      LECFlag: sample_lst2.get('ChangeFlag'),
+      LEDDate: sample_lst2.get('DetectionDate'),
+      LEFilter: sample_lst2.get('Filtered'),
+      LERDate: sample_lst2.get('RestoreDate'),
+      GCDate: sample_glad.get('glad')
+    });
+  }));
+};
+
+var ref2 = extract(ref);
+print(ref2);
+
+Export.table.toDrive(ref2);

@@ -1,0 +1,91 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var geometry = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-67.97372602601281, -5.363382097516581],
+          [-67.97372602601281, -11.554319952147692],
+          [-57.888276807262805, -11.554319952147692],
+          [-57.888276807262805, -5.363382097516581]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+var wd = 'projects/bu-nearrealtime/';
+var studyArea = ee.FeatureCollection(wd + 'areas/test_sites').filterBounds(geometry);
+
+var strata = ee.Image(wd + 'reference/strata').rename('stratum');
+//print(strata);
+//Map.addLayer(strata, {min:1, max:6, palette: ['white','black','cyan','green','blue', 'red']}, 'strata');
+
+var selectSample = function() {
+  return strata.stratifiedSample({
+    numPoints: 100,
+    region: studyArea,
+    scale: 10,
+    classValues: [1,2,3,4,5,6],
+    classPoints: [300,150,50,200,50,50],
+    geometries: true,
+    seed: 48
+  });
+};
+
+//var samples = selectSample();
+//var samples2 = samples.map(function(sample){return sample.set({mid: ee.Feature(sample).id()})});
+
+//print(samples2);
+//Map.addLayer(samples);
+
+var saveRegion = function(region) {
+  var area = studyArea.filterMetadata('id', 'equals', region);
+  var sampleSet = samples2.filterBounds(area);
+  var size = sampleSet.size().getInfo();
+  var sampleSet2 = sampleSet.randomColumn('random', 1209).sort('random').toList(800);
+
+  var sampleSet3 = ee.List([]);
+  for (var i=1;i<=size;i++) {
+    sampleSet3 = sampleSet3.add(ee.Feature(sampleSet2.get(i-1)).set({sid: i}));
+  }
+  
+  sampleSet3 = ee.FeatureCollection(sampleSet3);
+  
+  //print(sampleSet3);
+  //Map.addLayer(sampleSet3);
+  
+  Export.table.toAsset(sampleSet3, 'SaveSample' + region, 'projects/bu-nearrealtime/reference/' + region + '_samples');
+};
+
+//saveRegion('A1X1Y1');
+//saveRegion('A2X1Y1');
+//saveRegion('A3X1Y1');
+//saveRegion('A4X1Y1');
+//saveRegion('A5X1Y1');
+//saveRegion('A5X2Y1');
+//saveRegion('A6X1Y1');
+//saveRegion('A7X1Y1');
+
+var splitRegion = function(region) {
+  var samples = ee.FeatureCollection(wd + 'reference/' + region + '/' + region + '_samples');
+  var size = samples.size().getInfo();
+  for (var i=1;i<=size;i++) {
+    var sample = samples.filterMetadata('sid', 'equals', i).first();
+    var sample2 = ee.FeatureCollection([sample.set({stratum: null, region: region})])
+                    .set({sid: i, mid: sample.get('mid'), region: region});
+    Export.table.toAsset(sample2, region + '_' + i, 'projects/bu-nearrealtime/reference/' + region + '/samples/' + region + '_' + i);
+  }
+};
+
+//splitRegion('A1X1Y1');
+//splitRegion('A2X1Y1');
+//splitRegion('A3X1Y1');
+//splitRegion('A4X1Y1');
+//splitRegion('A5X1Y1');
+//splitRegion('A5X2Y1');
+splitRegion('A6X1Y1');
+//splitRegion('A7X1Y1');
+
+Map.addLayer(studyArea, {color: 'red'}, 'Study Area', false);
+Map.setCenter(-61.18418807329864, -6.3470237218092995, 6);
+Map.setOptions('SATELLITE');

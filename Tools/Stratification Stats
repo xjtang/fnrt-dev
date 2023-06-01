@@ -1,0 +1,27 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var sta = ee.Image("projects/bu-nearrealtime/reference/strata"),
+    region = 
+    /* color: #d63000 */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-68.03676630820924, -6.219618671888943],
+          [-68.03676630820924, -11.730112619043474],
+          [-58.19301630820924, -11.730112619043474],
+          [-58.19301630820924, -6.219618671888943]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+print(sta);
+Map.addLayer(sta, {min:0, max:6, palette: ['white','black']});
+
+// reduceRegion(reducer, geometry, scale, crs, crsTransform, bestEffort, maxPixels, tileScale)
+var staSize = sta.reduceRegion({
+                reducer: ee.Reducer.frequencyHistogram(),
+                geometry: region,
+                scale: 10,
+                maxPixels: 1e11
+              });
+//print(sta.projection().nominalScale())
+print(staSize);

@@ -1,0 +1,47 @@
+var utChart = require('users/xjtang/fnrt:Utilities/Chart');
+var utArea = require('users/xjtang/fnrt:Utilities/Area');
+var utParam = require('users/xjtang/fnrt:Utilities/Parameters');
+var utCommon = require('users/xjtang/fnrt:Utilities/Common');
+
+var wd = 'projects/bu-nearrealtime/';
+var studyArea = ee.FeatureCollection(wd + 'areas/test_sites');
+var alerts = ee.ImageCollection('projects/bu-nearrealtime/results/alerts');
+
+var hansen = ee.Image('UMD/hansen/global_forest_change_2019_v1_7');
+var treeGain = hansen.select('gain');
+var treeLoss = hansen.select('loss');
+var treeCover = hansen.select('treecover2000');
+
+var getForestMask = function(cover, loss, gain){
+  return cover.gt(50).add(gain).subtract(loss);
+};
+
+var forestMask = getForestMask(treeCover, treeLoss, treeGain);
+Map.addLayer(forestMask, {min: 0, max: 1, palette: ['grey', 'black']}, 'Forest Mask', true);
+
+var maskVis = utParam.getVisParam('Mask');
+var alertVis = utParam.getVisParam('Alerts');
+
+var LSTALT = alerts.filterMetadata('sensor','equals','LST');
+var S2ALT = alerts.filterMetadata('sensor','equals','S2');
+var S1ALT = alerts.filterMetadata('sensor','equals','S1');
+var LSTS2ALT = alerts.filterMetadata('sensor','equals','S2LST');
+var LSTS2S1ALT = alerts.filterMetadata('sensor','equals','S2S1LST');
+
+var visualize = function(col) {
+  var img = col.mosaic().unmask();
+  var alert = img.select('ChangeDate').updateMask(img.select('Filtered')).updateMask(forestMask);
+  var id = col.first().get('sensor').getInfo();
+  Map.addLayer(alert, alertVis, id + ' Alerts', false);
+};
+
+Map.addLayer(studyArea, {color: 'red'}, 'Study Area', false);
+
+visualize(LSTALT);
+visualize(S2ALT);
+visualize(S1ALT);
+visualize(LSTS2ALT);
+visualize(LSTS2S1ALT);
+
+Map.setCenter(-61.18418807329864, -6.3470237218092995, 6);
+Map.setOptions('SATELLITE');

@@ -1,0 +1,155 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var test = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-65.91212406242423, -4.356489399435246],
+          [-65.91212406242423, -5.062710484969712],
+          [-65.18153324211174, -5.062710484969712],
+          [-65.18153324211174, -4.356489399435246]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+var a = ee.FeatureCollection("users/bullocke/amazon/shapefiles/amazon_extent_full").first();
+var amazon = ee.Geometry.Polygon(a.geometry().coordinates());
+
+var utArea = require('users/xjtang/fnrt:Utilities/Area');
+var utParam = require('users/xjtang/fnrt:Utilities/Parameters');
+var utCommon = require('users/xjtang/fnrt:Sandbox/Common2');
+
+var nobs = ee.ImageCollection('projects/bu-nearrealtime/results/nob');
+
+var s1 = nobs.filterMetadata('sensor', 'equals', 'Sentinel-1');
+var s2 = nobs.filterMetadata('sensor', 'equals', 'Sentinel-2');
+var lst = nobs.filterMetadata('sensor', 'equals', 'Landsat');
+print(s1);
+print(s2);
+print(lst);
+
+var period = ee.Dictionary({
+   'start': '2020-01-01',
+   'end': '2020-12-31'});
+
+var getNoBMap = function(sensor, region, period, band) {
+  var data = utCommon.getData(region, period, sensor, true);
+  return data.select(band).count().rename('NoB');
+};
+
+var getNoB = function(sensor, region, period, res) {
+  var data = utCommon.getData(region, period, sensor, true);
+  var nob = data.select('NIR').count();
+  return nob.reduceRegion(ee.Reducer.mean(), region, res);
+};
+
+var monthly = function(month, sensor, band, name) {
+  if (month == 12) {
+    var period = ee.Dictionary({
+       'start': '2020-' + month + '-01',
+       'end': '2020-' + month + '-31'});
+  } else {
+    var period = ee.Dictionary({
+     'start': '2020-' + month + '-01',
+     'end': '2020-' + (month + 1) + '-01'});
+  }
+  var img = getNoBMap(sensor, amazon, period, band).set({sensor: sensor, month: month, year: 2020});
+  
+  Export.image.toAsset({image: img,
+                  description: 'NoB_' + month,
+                  assetId: 'projects/bu-nearrealtime/results/nob/' + name + '_NOB_' + month,
+                  region: amazon,
+                  scale: 900,
+                  maxPixels: 1e13
+  });
+};
+
+var getMonthly = function(sensor, month) {
+  var img = nobs.filterMetadata('sensor', 'equals', sensor).filterMetadata('month', 'equals', month).first();
+  return img.unmask().reduceRegion({
+                            reducer: ee.Reducer.mean(), 
+                            geometry: amazon, 
+                            scale: 900,
+                            maxPixels: 1e14
+  });
+};
+
+//print(monthly(1, 'Landsat'));
+
+var run = function() {
+  var lst = getNoBMap('Landsat', amazon, period, 'NIR');
+  Export.image.toAsset({image: lst,
+                    description: 'LST_NoB',
+                    assetId: 'projects/bu-nearrealtime/results/LST_NOB_2020',
+                    region: amazon,
+                    scale: 900,
+                    maxPixels: 1e13
+  });
+  
+  var s2 = getNoBMap('Sentinel-2', amazon, period, 'NIR');
+  Export.image.toAsset({image: s2,
+                    description: 'S2_NoB',
+                    assetId: 'projects/bu-nearrealtime/results/S2_NOB_2020',
+                    region: amazon,
+                    scale: 900,
+                    maxPixels: 1e13
+  });
+  
+  var s1 = getNoBMap('Sentinel-1', amazon, period, 'VV');
+  Export.image.toAsset({image: s1,
+                    description: 'S1_NoB',
+                    assetId: 'projects/bu-nearrealtime/results/S1_NOB_2020',
+                    region: amazon,
+                    scale: 900,
+                    maxPixels: 1e13
+  });
+};
+
+
+//run();
+
+var run2 = function(sensor, band, name) {
+  monthly(1, sensor, band, name);
+  monthly(2, sensor, band, name);
+  monthly(3, sensor, band, name);
+  monthly(4, sensor, band, name);
+  monthly(5, sensor, band, name);
+  monthly(6, sensor, band, name);
+  monthly(7, sensor, band, name);
+  monthly(8, sensor, band, name);
+  monthly(9, sensor, band, name);
+  monthly(10, sensor, band, name);
+  monthly(11, sensor, band, name);
+  monthly(12, sensor, band, name);
+};
+
+//run2('Landsat', 'NIR', 'LST');
+//run2('Sentinel-2', 'NIR', 'S2');
+//run2('Sentinel-1', 'VV', 'S1');
+
+var run3 = function(sensor) {
+  print(getMonthly(sensor, 1));
+  print(getMonthly(sensor, 2));
+  print(getMonthly(sensor, 3));
+  print(getMonthly(sensor, 4));
+  print(getMonthly(sensor, 5));
+  print(getMonthly(sensor, 6));
+  print(getMonthly(sensor, 7));
+  print(getMonthly(sensor, 8));
+  print(getMonthly(sensor, 9));
+  print(getMonthly(sensor, 10));
+  print(getMonthly(sensor, 11));
+  print(getMonthly(sensor, 12));
+};
+
+//run3('Sentinel-1');
+
+var palettes = require('users/gena/packages:palettes');
+var palette = palettes.kovesi.rainbow_bgyr_35_85_c72[7];
+var perct_palette = palettes.colorbrewer.Paired[6];
+
+//var palette = ['7400B8','6930C3','5E60CE','5390D9','4EA8DE','48BFE3','56CFE1','64DFDF','72EFDD','80FFDB'];
+Map.addLayer(lst.sum().clip(amazon), {min:0, max:50, palette: palette}, 'LST');
+Map.addLayer(s2.sum().clip(amazon), {min:0, max:50, palette: palette}, 'S2');
+Map.addLayer(s1.sum().clip(amazon), {min:0, max:50, palette: palette}, 'S1');

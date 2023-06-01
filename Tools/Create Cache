@@ -1,0 +1,187 @@
+// Fusion Near Real-time
+// Near real-time monitoring of forest disturbance by fusion of multi-sensor data
+
+// Create cache for samples
+
+// ---------------------------------------------------------------
+// Imports and predefined variables:
+var areaID = 'A3X1Y1';
+var sampleSet = areaID;
+var sensor2 = 'LSTS1S2';
+var filename = sampleSet + '_CCD_';
+var filename2 = sampleSet + '_NRT';
+var samples = ee.FeatureCollection('projects/bu-nearrealtime/reference/' + areaID + '/' + areaID + '_samples');
+
+var utChart = require('users/xjtang/fnrt:Utilities/Chart');
+var utArea = require('users/xjtang/fnrt:Utilities/Area');
+var utParam = require('users/xjtang/fnrt:Utilities/Parameters');
+var utCommon = require('users/xjtang/fnrt:Utilities/Common');
+var trainPeriod = utParam.trainPeriod;
+var monitorPeriod = utParam.monitorPeriod;
+var fullPeriod = utParam.fullPeriod;
+var wd = 'projects/bu-nearrealtime/';
+var studyArea = ee.FeatureCollection(wd + 'areas/test_sites');
+var region = null;
+var LSTCCD = null;
+var LSTNRT = null;
+var LSTRTS = null;
+var MODCCD = null;
+var S1CCD = null;
+var S1NRT = null;
+var S1RTS = null;
+var S2CCD = null;
+var S2NRT = null;
+var S2RTS = null;
+
+// ---------------------------------------------------------------
+// Main functions:
+  // generate CCD cache
+var genCCDCache = function(samples, sensor) {
+  var cache = ee.FeatureCollection(samples.map(function(sample){
+    var TS = getCCDTS(sample, sensor);
+    var sid = sample.getNumber('sid');
+    return ee.FeatureCollection(TS.map(function(x){return x.set({sid: sid})}));
+  }));
+  
+  return cache.flatten().set({
+    region: areaID, 
+    sensor: sensor, 
+    sample: sampleSet,
+    ctype: 'CCD' 
+  }).sort('fitTime');
+};
+
+  // generate NRT cache
+var genNRTCache = function(samples) {
+  var cache = ee.FeatureCollection(samples.map(function(sample){
+    var TS = getNRTTS(sample);
+    var sid = sample.getNumber('sid');
+    return ee.FeatureCollection(TS.map(function(x){return x.set({sid: sid})}));
+  }));
+  
+  return cache.flatten().set({
+    region: areaID, 
+    sensor: sensor2, 
+    sample: sampleSet,
+    ctype: 'NRT' 
+  }).sort('fitTime');
+};
+
+  // get ccd time series
+var getCCDTS = function(sample, sensor) {
+  var pixel = sample.geometry();
+  var trainData = utCommon.getData(pixel, trainPeriod, sensor, false);
+  var monitorData = utCommon.getData(pixel, monitorPeriod, sensor, false);
+  var ccdParam = utParam.getCCDParam(sensor);
+  var runParam = utParam.getRunParam(sensor);
+  var ccdBand = getCCDBands(sensor);
+  var ccd = getBaseline(sensor, 'ccd');
+  var ccdTS = utChart.getTimeSeries(trainData, monitorData, ccd, pixel, ccdParam.dateFormat, ccdBand, 0.1);
+  return ee.FeatureCollection(ccdTS);
+};
+
+  // add sensor to ts
+var addSensor = function(col, sensor) {
+  return ee.FeatureCollection(col.map(function(x){return x.set({sensor: sensor})}));
+};
+
+  // run sensor specific near real time
+var runSensorNRT = function(pixel, sensor) {
+  var train = utCommon.getData(pixel, trainPeriod, sensor, false);
+  var monitor = ee.ImageCollection(getBaseline(sensor, 'rts'));
+  var ccdParam = utParam.getCCDParam(sensor);
+  var runParam = utParam.getRunParam(sensor);
+  var nrtParam = utParam.getNRTParam(sensor);
+  nrtParam.maxZ = 1000;
+  var ccd = getBaseline(sensor, 'ccd');
+  var ccdTS = utChart.getTimeSeries2(train, monitor, ccd, pixel, ccdParam.dateFormat, nrtParam.band);
+  var Z = utChart.addZ2(ccdTS, nrtParam.c, getBaseline(sensor, 'nrt'), pixel, nrtParam.maxZ, nrtParam.minSTD);
+  return addSensor(utChart.checkZ(Z, nrtParam), sensor);
+};
+
+  // get nrt time series
+var getNRTTS = function(sample) {
+  var pixel = sample.geometry();
+  var nrtParam = utParam.getNRTParam('Common');
+  var nrtTS = ee.FeatureCollection([]);
+  nrtTS = nrtTS.merge(runSensorNRT(pixel, 'Sentinel-2'));
+  nrtTS = nrtTS.merge(runSensorNRT(pixel, 'Sentinel-1'));
+  nrtTS = nrtTS.merge(runSensorNRT(pixel, 'Landsat'));
+  nrtTS = nrtTS.filterMetadata('x', 'not_equals', null);
+  return(nrtTS);
+};
+
+  // choose files
+var getBaseline = function(sensor, baseline) {
+  if (sensor == 'Sentinel-1'){
+    if (baseline == 'nrt') {
+      return S1NRT;
+    } else if (baseline == 'rts') {
+      return S1RTS;
+    } else {
+      return S1CCD;
+    }
+  } else if (sensor == 'Sentinel-2') {
+    if (baseline == 'nrt') {
+      return S2NRT;
+    } else if (baseline == 'rts') {
+      return S2RTS;
+    } else {
+      return S2CCD;
+    }
+  } else if (sensor == 'MODIS') {
+      return MODCCD;
+  } else {
+    if (baseline == 'nrt') {
+      return LSTNRT;
+    } else if (baseline == 'rts') {
+      return LSTRTS;
+    } else {
+      return LSTCCD;
+    }
+  }
+};
+
+var getCCDBands = function(sensor) {
+  var runParam = utParam.getRunParam(sensor);
+  return runParam.band;
+};
+
+var loadBaseline = function() {
+  region = studyArea.filterMetadata('id', 'contains', areaID).first().geometry();
+  var CCD = ee.ImageCollection(wd + 'baselines/ccd').filterMetadata('region', 'equals', areaID);
+  LSTCCD = CCD.filterMetadata('sensor', 'equals', 'Landsat').first();
+  S1CCD = CCD.filterMetadata('sensor', 'equals', 'Sentinel-1').first();
+  S2CCD = CCD.filterMetadata('sensor', 'equals', 'Sentinel-2').first();
+  MODCCD = CCD.filterMetadata('sensor', 'equals', 'MODIS').first();
+  var NRT = ee.ImageCollection(wd + 'baselines/nrt').filterMetadata('region', 'equals', areaID);  
+  LSTNRT = NRT.filterMetadata('sensor', 'equals', 'Landsat').first();
+  S1NRT = NRT.filterMetadata('sensor', 'equals', 'Sentinel-1').first();
+  S2NRT = NRT.filterMetadata('sensor', 'equals', 'Sentinel-2').first();
+  var RTS = ee.ImageCollection(wd + 'baselines/rts').filterMetadata('region', 'equals', areaID);
+  LSTRTS = RTS.filterMetadata('sensor', 'equals', 'Landsat');
+  S1RTS = RTS.filterMetadata('sensor', 'equals', 'Sentinel-1');
+  S2RTS = RTS.filterMetadata('sensor', 'equals', 'Sentinel-2');
+};
+
+// ---------------------------------------------------------------
+// Initialization:
+loadBaseline();
+//var cacheLST = genCCDCache(samples, 'Landsat');
+//Export.table.toAsset(cacheLST, sampleSet + '_LST', wd + 'reference/' + sampleSet + '/' + filename + 'LST');
+//var cacheS1 = genCCDCache(samples, 'Sentinel-1');
+//Export.table.toAsset(cacheS1, sampleSet + '_S1', wd + 'reference/' + sampleSet + '/' + filename + 'S1');
+//var cacheS2 = genCCDCache(samples, 'Sentinel-2');
+//Export.table.toAsset(cacheS2, sampleSet + '_S2', wd + 'reference/' + sampleSet + '/' + filename + 'S2');
+//var cacheMOD = genCCDCache(samples, 'MODIS');
+//Export.table.toAsset(cacheMOD, sampleSet + '_MOD', wd + 'reference/' + sampleSet + '/' + filename + 'MOD');
+var cacheNRT = genNRTCache(samples);
+Export.table.toDrive(cacheNRT);
+//print(cacheLST)
+//print(cacheS1)
+//print(cacheS2)
+//print(cacheMOD)
+//print(cacheNRT)
+
+
+// End

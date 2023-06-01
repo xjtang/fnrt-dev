@@ -1,0 +1,31 @@
+var A1X1Y1 = ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A1X1Y1_done');
+var A2X1Y1 = ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A2X1Y1_done');
+var A3X1Y1 = ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A3X1Y1_done');
+var A4X1Y1 = ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A4X1Y1_done');
+var A5X1Y1 = ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A5X1Y1_done');
+var A5X2Y1 = ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A5X2Y1_done');
+var A6X1Y1 = ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A6X1Y1_done');
+var A7X1Y1 = ee.FeatureCollection('projects/bu-nearrealtime/reference/done/A7X1Y1_done');
+
+var ref = A1X1Y1.merge(A2X1Y1).merge(A3X1Y1).merge(A4X1Y1).merge(A5X1Y1).merge(A5X2Y1).merge(A6X1Y1).merge(A7X1Y1);
+print(ref);
+Map.addLayer(ref);
+
+var glad = ee.Image('projects/glad/alert/UpdResult/01_01_SA').select('alertDate20').rename('glad');
+print(glad);
+Map.addLayer(glad);
+
+// extract map values to reference dataset
+var extract = function(ref) {
+  return ee.FeatureCollection(ref.map(function(sample){
+    var sample_glad = glad.reduceRegion(ee.Reducer.first(), sample.geometry(), 30);
+    return sample.set({
+      GCDate: sample_glad.get('glad'),
+    });
+  }));
+};
+
+var ref2 = extract(ref);
+print(ref2);
+
+Export.table.toDrive(ref2);

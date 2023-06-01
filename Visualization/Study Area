@@ -1,0 +1,130 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var preliminary = 
+    /* color: #0b4a8b */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.MultiPolygon(
+        [[[[-67.35248836646284, -8.338715180915393],
+           [-67.35248836646284, -9.104289428749134],
+           [-66.38569149146284, -9.104289428749134],
+           [-66.38569149146284, -8.338715180915393]]],
+         [[[-66.24836238990034, -8.941533785143074],
+           [-66.24836238990034, -9.949396246813697],
+           [-65.13874324927534, -9.949396246813697],
+           [-65.13874324927534, -8.941533785143074]]],
+         [[[-63.488362280788564, -8.0155939052846],
+           [-63.488362280788564, -9.069429538511573],
+           [-62.016194312038564, -9.069429538511573],
+           [-62.016194312038564, -8.0155939052846]]],
+         [[[-61.801960913601064, -7.422267162893549],
+           [-61.801960913601064, -8.146120771934504],
+           [-60.901082007351064, -8.146120771934504],
+           [-60.901082007351064, -7.422267162893549]]],
+         [[[-60.208943335476064, -6.61537823564684],
+           [-60.208943335476064, -7.596540742263469],
+           [-59.082844702663564, -7.596540742263469],
+           [-59.082844702663564, -6.61537823564684]]],
+         [[[-56.40254024561312, -5.88178010186344],
+           [-56.40254024561312, -8.942764216596771],
+           [-54.26020626123812, -8.942764216596771],
+           [-54.26020626123812, -5.88178010186344]]],
+         [[[-56.73147506806184, -3.591675837260347],
+           [-56.73147506806184, -5.508133910446371],
+           [-54.55068893524934, -5.508133910446371],
+           [-54.55068893524934, -3.591675837260347]]],
+         [[[-64.80876512450327, -9.347573703819501],
+           [-64.80876512450327, -10.343416829258873],
+           [-63.81999559325326, -10.343416829258873],
+           [-63.81999559325326, -9.347573703819501]]],
+         [[[-63.3281045781816, -6.662984773619137],
+           [-63.3281045781816, -7.270947172943893],
+           [-62.83097323052535, -7.270947172943893],
+           [-62.83097323052535, -6.662984773619137]]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Fusion Near Real-time
+// Near real-time monitoring of forest disturbance by fusion of multi-sensor data
+
+// Study Area
+
+// ---------------------------------------------------------------
+// Import GLAD Alerts
+var glad = ee.ImageCollection('projects/glad/alert/UpdResult')
+            .mosaic().select('alertDate20').selfMask();
+var gladVisParam = {min: 1, max: 365, palette: ['00FFFF', '0000FF']};
+
+// Generate Study Area
+var A1X1Y1 = ee.Feature(ee.Geometry.BBox(-67.35, -9.1, -66.4, -8.35), {id: 'A1X1Y1'});
+
+var A2X1Y1 = ee.Feature(ee.Geometry.BBox(-66.2, -9.95, -65.2, -8.95), {id: 'A2X1Y1'});
+
+var A3X1Y1 = ee.Feature(ee.Geometry.BBox(-64.8, -10.35, -63.8, -9.35), {id: 'A3X1Y1'});
+
+var A4X1Y1 = ee.Feature(ee.Geometry.BBox(-63.3, -7.25, -62.8, -6.65), {id: 'A4X1Y1'});
+
+var A5X1Y1 = ee.Feature(ee.Geometry.BBox(-63.495, -9, -62.745, -8), {id: 'A5X1Y1'});
+var A5X2Y1 = ee.Feature(ee.Geometry.BBox(-62.75, -9, -62, -8), {id: 'A5X2Y1'});
+
+var A6X1Y1 = ee.Feature(ee.Geometry.BBox(-61.85, -8.2, -60.85, -7.4), {id: 'A6X1Y1'});
+
+var A7X1Y1 = ee.Feature(ee.Geometry.BBox(-60.15, -7.6, -59.15, -6.6), {id: 'A7X1Y1'});
+
+var A8X1Y2 = ee.Feature(ee.Geometry.BBox(-56.7, -5.5, -56, -4.55), {id: 'A8X1Y2'});
+var A8X2Y2 = ee.Feature(ee.Geometry.BBox(-56.005, -5.5, -55.305, -4.55), {id: 'A8X2Y2'});
+var A8X3Y2 = ee.Feature(ee.Geometry.BBox(-55.31, -5.5, -54.61, -4.55), {id: 'A8X3Y2'});
+var A8X1Y1 = ee.Feature(ee.Geometry.BBox(-56.7, -4.555, -56, -3.605), {id: 'A8X1Y1'});
+var A8X2Y1 = ee.Feature(ee.Geometry.BBox(-56.005, -4.555, -55.305, -3.605), {id: 'A8X2Y1'});
+var A8X3Y1 = ee.Feature(ee.Geometry.BBox(-55.31, -4.555, -54.61, -3.605), {id: 'A8X3Y1'});
+
+var A9X1Y3 = ee.Feature(ee.Geometry.BBox(-56.4, -8.9, -55.695, -7.905), {id: 'A9X1Y3'});
+var A9X2Y3 = ee.Feature(ee.Geometry.BBox(-55.705, -8.9, -54.995, -7.905), {id: 'A9X2Y3'});
+var A9X3Y3 = ee.Feature(ee.Geometry.BBox(-55.005, -8.9, -54.3, -7.905), {id: 'A9X3Y3'});
+var A9X1Y2 = ee.Feature(ee.Geometry.BBox(-56.4, -7.91, -55.695, -6.915), {id: 'A9X1Y2'});
+var A9X2Y2 = ee.Feature(ee.Geometry.BBox(-55.705, -7.91, -54.995, -6.915), {id: 'A9X2Y2'});
+var A9X3Y2 = ee.Feature(ee.Geometry.BBox(-55.005, -7.91, -54.3, -6.915), {id: 'A9X3Y2'});
+var A9X1Y1 = ee.Feature(ee.Geometry.BBox(-56.4, -6.92, -55.695, -5.925), {id: 'A9X1Y1'});
+var A9X2Y1 = ee.Feature(ee.Geometry.BBox(-55.705, -6.92, -54.995, -5.925), {id: 'A9X2Y1'});
+var A9X3Y1 = ee.Feature(ee.Geometry.BBox(-55.005, -6.92, -54.3, -5.925), {id: 'A9X3Y1'});
+
+var studyarea = ee.FeatureCollection([A1X1Y1, A2X1Y1, A3X1Y1, A4X1Y1, A5X1Y1, A5X2Y1, 
+                                      A6X1Y1, A7X1Y1, A8X1Y2, A8X2Y2, A8X3Y2, A8X1Y1, 
+                                      A8X2Y1, A8X3Y1, A9X1Y3, A9X2Y3, A9X3Y3, A9X1Y2, 
+                                      A9X2Y2, A9X3Y2, A9X1Y1, A9X2Y1, A9X3Y1]);
+                                      
+
+Export.table.toAsset(studyarea, 'StudyArea', 'study_area');
+
+// ---------------------------------------------------------------
+// Initialization:
+Map.setCenter(-55.18418807329864, -6.3470237218092995, 6);
+Map.setOptions('SATELLITE');
+Map.addLayer(glad, gladVisParam, 'GLAD Alerts');
+Map.addLayer(studyarea, {color: 'red'}, 'Study Area');
+
+// End
