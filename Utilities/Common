@@ -408,27 +408,35 @@ var maskSen2Img = function(img) {
 // ---------------------------------------------------------------
 // Sentinel-1 Utilities
 var S1Param = utParam.getS1Param();
-var sf = 10;
+if (S1Param.rawPower) {
+  var scaleFactor = 0;
+} else {
+  var scaleFactor = 30;
+}
 
 var getSen1TS = function(region, params, merge){
-  var spatialSmoothing = function(img) {
+  var preserveTime = function(img) {
     var st = img.get('system:time_start');
+    return img.set('timeStamp', st);
+  };
+  
+  var spatialSmoothing = function(img) {
+    var st = img.get('timeStamp');
     var geom = img.geometry();
-    var angle = img.select('angle');
+    //var angle = img.select('angle');
     var edge = img.select('VV').lt(-30.0);
     if (S1Param.rawPower) {
       var vv_power = ee.Image.constant(10).pow(img.select('VV').divide(10.0));
       var vh_power = ee.Image.constant(10).pow(img.select('VH').divide(10.0));
       var fmean = ee.Image.cat([vv_power, vh_power]).rename(['VV','VH']);
-      sf = 1;
     } else {
-      var fmean = img.select('V.').add(30);
+      var fmean = img.select('V.');
     }
     if (S1Param.kernelType) {
       fmean = fmean.focal_mean(S1Param.focalSize, S1Param.kernelType);
     }
-    var ratio = fmean.select('VH').divide(fmean.select('VV')).rename('ratio').multiply(30);
-    return img.select().addBands(fmean).addBands(ratio).addBands(angle).set('timeStamp', st);
+    var ratio = fmean.select('VH').divide(fmean.select('VV')).multiply(scaleFactor).rename('ratio');
+    return img.select().addBands(fmean.add(scaleFactor)).addBands(ratio).set('system:time_start', st);
   };
   
   var S1 = ee.ImageCollection('COPERNICUS/S1_GRD')
@@ -436,14 +444,14 @@ var getSen1TS = function(region, params, merge){
     .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
     .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
     .filter(ee.Filter.eq('instrumentMode', 'IW'))
-    .select(['V.','angle']).map(spatialSmoothing)
-    .select(S1Param.bands);
+    .select(['V.','angle'])
+    .map(preserveTime);
   //print(S1);
+  
   if (S1Param.orbit == 'Ascend' || S1Param.orbit == 'Descend') {
     var S1Filtered = S1.filter(ee.Filter.eq('orbitProperties_pass', S1Param.orbit.toUpperCase()))}
   else if (S1Param.orbit == 'Auto') {
     var passCount = ee.Dictionary(S1.aggregate_histogram('orbitProperties_pass'));
-    print(passCount);
     var passValues = passCount.values().sort().reverse();
     var higherCount = passValues.get(0);
     var maxOrbitalPass = passCount.keys().get(passCount.values().indexOf(higherCount));
@@ -459,25 +467,9 @@ var getSen1TS = function(region, params, merge){
        'buffer': 75});
   }
 
-  //if (region.type().getInfo() == 'Point') {
-  //  var region2 = region.buffer(S1Param.bufferSize).bounds();
-  //} else {
-    var region2 = region
-  //}
-  //print(S1Corrected);
-  var S1Ready = S1Corrected.map(function(img) {
-    var st = img.get('timeStamp');
-    img = ee.Image(ee.Algorithms.If(S1Param.spatialNormalize, S1SpatialNormalize(img, region2), img));
-    return img.addBands(img.select('VH').divide(img.select('VV'))
-              .rename('ratio').multiply(sf)).set('system:time_start', st);
-  });
-  //print(S1Ready);
-  if (merge) {
-    return dailyComposite(addImgDate(S1Ready));
-  } else {
-    return S1Ready;
-    //return removeDuplicate(addImgDate(S1Ready));
-  }
+  var S1Smoothed = S1Corrected.map(spatialSmoothing).select(['VH','VV','ratio']);
+  
+  return S1Smoothed;
 };
 
 var getSen1Img = function(region, date) {
