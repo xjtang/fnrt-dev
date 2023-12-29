@@ -115,6 +115,10 @@ var convertDateFormat = function(date, format) {
     var year = date.get('year');
     var fYear = date.difference(ee.Date.fromYMD(year, 1, 1), 'year');
     return year.add(fYear);
+  } else if (format == 3) {
+    var year = date.get('year');
+    var doy = date.difference(ee.Date.fromYMD(year, 1, 1), 'day');
+    return year.multiply(1000).add(doy);
   } else {
     return date.millis();
   }

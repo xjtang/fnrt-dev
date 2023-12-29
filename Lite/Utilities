@@ -152,7 +152,7 @@ var monitorChange = function(zScores, nrtParam) {
     var date = ee.Image(result).select('date');
     var shiftImg = img.select('z').mask().eq(0).multiply(shift+1).add(shift);
     change = change.bitwiseAnd(shiftImg).multiply(shiftImg.eq(shift).add(1))
-                    .add(img.select('strike').unmask().gt(0));
+                    .add(ee.Image(1).updateMask(img.select('strike')).unmask());
     date = date.add(change.bitCount().gte(nrtParam.n).multiply(date.eq(0))
                 .multiply(ee.Number(convertDateFormat(ee.Date(img.get('system:time_start')), 1))));
     return(change.addBands(date));
